@@ -1085,7 +1085,6 @@ def train(dim_word=100,  # word vector dimensionality
                                            g / tensor.sqrt(g2) * clip_c,
                                            g))
         grads = new_grads
-
     # compile the optimizer, the actual computational graph is compiled here
     lr = tensor.scalar(name='lr')
     print 'Building optimizers...',

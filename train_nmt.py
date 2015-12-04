@@ -33,9 +33,9 @@ def main(job_id, params):
     return validerr
 
 if __name__ == '__main__':
-    basedir = '/u/goyalani/dl4mt-material/'
+    basedir = '/data/lisatmp3/nmt/data'
     main(0, {
-	'basedir' : ['/u/goyalani/dl4mt-material/'],
+	'basedir' : ['/data/lisatmp3/nmt/data'],
         'model': ['%s/models/model_attention.npz'%basedir],
         'dim_word': [150],
         'dim': [124],
