@@ -16,7 +16,7 @@ import sys
 import time
 
 from collections import OrderedDict
-from data_iterator import WWIterator
+from data_iterator import WCIterator
 from utils import *
 from optimizers import *
 from layers import *
@@ -466,12 +466,12 @@ def train(dim_word_src=100,  # source word vector dimensionality
             models_options = pkl.load(f)
 
     print 'Loading data'
-    train = WWIterator(datasets[0], datasets[1],
+    train = WCIterator(datasets[0], datasets[1],
                          dictionaries[0], dictionaries[1],
                          n_words_source=n_words_src, n_words_target=n_words,
                          batch_size=batch_size,
                          maxlen=maxlen)
-    valid = WWIterator(valid_datasets[0], valid_datasets[1],
+    valid = WCIterator(valid_datasets[0], valid_datasets[1],
                          dictionaries[0], dictionaries[1],
                          n_words_source=n_words_src, n_words_target=n_words,
                          batch_size=valid_batch_size,
@@ -574,7 +574,7 @@ def train(dim_word_src=100,  # source word vector dimensionality
 
             x, x_mask, y, y_mask = prepare_data(x, y, maxlen=maxlen)
 
-            if x is None:
+            if x is None or y is None:
                 #print 'Minibatch with zero sample under length ', maxlen
                 uidx -= 1
                 continue
@@ -622,38 +622,47 @@ def train(dim_word_src=100,  # source word vector dimensionality
                                                maxlen=30,
                                                stochastic=stochastic,
                                                argmax=False)
+
                     print 'Source ', jj, ': ',
+                    source_string = []
                     for vv in x[:, jj]:
-                        if vv == 0:
+                        if vv == 0: # EOS
+                            print ' '.join(source_string)
                             break
                         if vv in worddicts_r[0]:
-                            print worddicts_r[0][vv],
+                            source_string.append(worddicts_r[0][vv])
                         else:
-                            print 'UNK',
-                    print
+                            source_string.append('UNK')
                     print 'Truth ', jj, ' : ',
+                    truth_string = []
                     for vv in y[:, jj]:
-                        if vv == 0:
+                        if vv == 0: # EOS
+                            print ''.join(truth_string)
                             break
                         if vv in worddicts_r[1]:
-                            print worddicts_r[1][vv],
+                            truth_string.append(worddicts_r[1][vv])
                         else:
-                            print 'UNK',
-                    print
+                            truth_string.append('UNK')
+
                     print 'Sample ', jj, ': ',
+                    if not (sample[-1] == 0):
+                        sample.append(0)
+
+                    sample_string = []
                     if stochastic:
                         ss = sample
                     else:
                         score = score / numpy.array([len(s) for s in sample])
                         ss = sample[score.argmin()]
-                    for vv in ss:
+
+                    for vv in sample:
                         if vv == 0:
+                            print ''.join(sample_string)
                             break
                         if vv in worddicts_r[1]:
-                            print worddicts_r[1][vv],
+                            sample_string.append(worddicts_r[1][vv])
                         else:
-                            print 'UNK',
-                    print
+                            sample_string.append('UNK')
 
             # validate model on validation set and early stop if necessary
             if numpy.mod(uidx, validFreq) == 0:

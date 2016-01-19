@@ -1,7 +1,7 @@
 import numpy
 import os
 
-from nmt import train
+from trg_char_nmt import train
 
 def main(job_id, params):
     print params
@@ -17,14 +17,14 @@ def main(job_id, params):
                                         lrate=params['learning-rate'][0],
                                         optimizer=params['optimizer'][0], 
                                         maxlen=50,
-                                        batch_size=80,
-                                        valid_batch_size=80,
+                                        batch_size=32,
+                                        valid_batch_size=32,
 					datasets=['/home/%s/data/mt/europarl-v7.fr-en.en.tok'%os.environ['USER'], 
-					'/home/%s/data/mt/europarl-v7.fr-en.fr.tok'%os.environ['USER']],
+					'/home/%s/data/mt/europarl-v7.fr-en.fr'%os.environ['USER']],
 					valid_datasets=['/home/%s/data/mt/newstest2011.en.tok'%os.environ['USER'], 
-					'/home/%s/data/mt/newstest2011.fr.tok'%os.environ['USER']],
+					'/home/%s/data/mt/newstest2011.fr'%os.environ['USER']],
 					dictionaries=['/home/%s/data/mt/europarl-v7.fr-en.en.tok.pkl'%os.environ['USER'], 
-					'/home/%s/data/mt/europarl-v7.fr-en.fr.tok.pkl'%os.environ['USER']],
+					'/home/%s/data/mt/europarl-v7.fr-en.fr.pkl'%os.environ['USER']],
                                         validFreq=5000,
                                         dispFreq=500,
                                         saveFreq=5000,
@@ -36,10 +36,10 @@ if __name__ == '__main__':
     main(0, {
         'model': ['model_hal.npz'],
         'dim_word_src': [512],
-        'dim_word_trg': [512],
+        'dim_word_trg': [100],
         'dim': [1024],
-        'src_vocab_size': [30000], 
-        'trg_vocab_size': [30000], 
+        'src_vocab_size': [300000], 
+        'trg_vocab_size': [324], 
         'optimizer': ['adadelta'],
         'decay-c': [0.], 
         'clip-c': [1.], 
