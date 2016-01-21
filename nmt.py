@@ -16,7 +16,7 @@ import sys
 import time
 
 from collections import OrderedDict
-from data_iterator import WWIterator
+from data_iterator import WordPairIterator
 from utils import *
 from optimizers import *
 from layers import *
@@ -25,7 +25,6 @@ import settings
 profile = settings.profile
 
 # batch preparation
-#def prepare_data(seqs_x, seqs_y, maxlen=None, n_words_src=30000, n_words=30000):
 def prepare_data(seqs_x, seqs_y, maxlen=None):
     # x: a list of sentences
     lengths_x = [len(s) for s in seqs_x]
@@ -77,35 +76,35 @@ def init_params(options):
 
     # encoder: bidirectional RNN
     params = get_layer(options['encoder'])[0](options, params,
-                                              pre='encoder',
+                                              prefix='encoder',
                                               nin=options['dim_word_src'],
                                               dim=options['dim'])
     params = get_layer(options['encoder'])[0](options, params,
-                                              pre='encoder_r',
+                                              prefix='encoder_r',
                                               nin=options['dim_word_src'],
                                               dim=options['dim'])
     ctxdim = 2 * options['dim']
 
     # init_state, init_cell
-    params = get_layer('ff')[0](options, params, pre='ff_state',
+    params = get_layer('ff')[0](options, params, prefix='ff_state',
                                 nin=ctxdim, nout=options['dim'])
     # decoder
     params = get_layer(options['decoder'])[0](options, params,
-                                              pre='decoder',
+                                              prefix='decoder',
                                               nin=options['dim_word_trg'],
                                               dim=options['dim'],
                                               dimctx=ctxdim)
     # readout
-    params = get_layer('ff')[0](options, params, pre='ff_logit_lstm',
+    params = get_layer('ff')[0](options, params, prefix='ff_logit_lstm',
                                 nin=options['dim'], nout=options['dim_word_trg'],
                                 ortho=False)
-    params = get_layer('ff')[0](options, params, pre='ff_logit_prev',
+    params = get_layer('ff')[0](options, params, prefix='ff_logit_prev',
                                 nin=options['dim_word_trg'],
                                 nout=options['dim_word_trg'], ortho=False)
-    params = get_layer('ff')[0](options, params, pre='ff_logit_ctx',
+    params = get_layer('ff')[0](options, params, prefix='ff_logit_ctx',
                                 nin=ctxdim, nout=options['dim_word_trg'],
                                 ortho=False)
-    params = get_layer('ff')[0](options, params, pre='ff_logit',
+    params = get_layer('ff')[0](options, params, prefix='ff_logit',
                                 nin=options['dim_word_trg'],
                                 nout=options['n_words'])
 
@@ -137,13 +136,13 @@ def build_model(tparams, options):
     emb = tparams['Wemb'][x.flatten()]
     emb = emb.reshape([n_timesteps, n_samples, options['dim_word_src']])
     proj = get_layer(options['encoder'])[1](tparams, emb, options,
-                                            pre='encoder',
+                                            prefix='encoder',
                                             mask=x_mask)
     # word embedding for backward rnn (source)
     embr = tparams['Wemb'][xr.flatten()]
     embr = embr.reshape([n_timesteps, n_samples, options['dim_word_src']])
     projr = get_layer(options['encoder'])[1](tparams, embr, options,
-                                             pre='encoder_r',
+                                             prefix='encoder_r',
                                              mask=xr_mask)
 
     # context will be the concatenation of forward and backward rnns
@@ -157,7 +156,7 @@ def build_model(tparams, options):
 
     # initial decoder state
     init_state = get_layer('ff')[1](tparams, ctx_mean, options,
-                                    pre='ff_state', activ='tanh')
+                                    prefix='ff_state', activ='tanh')
 
     # word embedding (target), we will shift the target sequence one time step
     # to the right. This is done because of the bi-gram connections in the
@@ -171,7 +170,7 @@ def build_model(tparams, options):
 
     # decoder - pass through the decoder conditional gru with attention
     proj = get_layer(options['decoder'])[1](tparams, emb, options,
-                                            pre='decoder',
+                                            prefix='decoder',
                                             mask=y_mask, context=ctx,
                                             context_mask=x_mask,
                                             one_step=False,
@@ -187,16 +186,16 @@ def build_model(tparams, options):
 
     # compute word probabilities
     logit_lstm = get_layer('ff')[1](tparams, proj_h, options,
-                                    pre='ff_logit_lstm', activ='linear')
+                                    prefix='ff_logit_lstm', activ='linear')
     logit_prev = get_layer('ff')[1](tparams, emb, options,
-                                    pre='ff_logit_prev', activ='linear')
+                                    prefix='ff_logit_prev', activ='linear')
     logit_ctx = get_layer('ff')[1](tparams, ctxs, options,
-                                   pre='ff_logit_ctx', activ='linear')
+                                   prefix='ff_logit_ctx', activ='linear')
     logit = tensor.tanh(logit_lstm+logit_prev+logit_ctx)
     if options['use_dropout']:
         logit = dropout_layer(logit, use_noise, trng)
     logit = get_layer('ff')[1](tparams, logit, options, 
-                               pre='ff_logit', activ='linear')
+                               prefix='ff_logit', activ='linear')
     logit_shp = logit.shape
     probs = tensor.nnet.softmax(logit.reshape([logit_shp[0]*logit_shp[1],
                                                logit_shp[2]]))
@@ -226,9 +225,9 @@ def build_sampler(tparams, options, trng):
 
     # encoder
     proj = get_layer(options['encoder'])[1](tparams, emb, options,
-                                            pre='encoder')
+                                            prefix='encoder')
     projr = get_layer(options['encoder'])[1](tparams, embr, options,
-                                             pre='encoder_r')
+                                             prefix='encoder_r')
 
     # concatenate forward and backward rnn hidden states
     ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim-1)
@@ -237,7 +236,7 @@ def build_sampler(tparams, options, trng):
     ctx_mean = ctx.mean(0)
     # ctx_mean = concatenate([proj[0][-1],projr[0][-1]], axis=proj[0].ndim-2)
     init_state = get_layer('ff')[1](tparams, ctx_mean, options,
-                                    pre='ff_state', activ='tanh')
+                                    prefix='ff_state', activ='tanh')
 
     print 'Building f_init...',
     outs = [init_state, ctx]
@@ -255,7 +254,7 @@ def build_sampler(tparams, options, trng):
 
     # apply one step of conditional gru with attention
     proj = get_layer(options['decoder'])[1](tparams, emb, options,
-                                            pre='decoder',
+                                            prefix='decoder',
                                             mask=None, context=ctx,
                                             one_step=True,
                                             init_state=init_state)
@@ -266,14 +265,14 @@ def build_sampler(tparams, options, trng):
     ctxs = proj[1]
 
     logit_lstm = get_layer('ff')[1](tparams, next_state, options,
-                                    pre='ff_logit_lstm', activ='linear')
+                                    prefix='ff_logit_lstm', activ='linear')
     logit_prev = get_layer('ff')[1](tparams, emb, options,
-                                    pre='ff_logit_prev', activ='linear')
+                                    prefix='ff_logit_prev', activ='linear')
     logit_ctx = get_layer('ff')[1](tparams, ctxs, options,
-                                   pre='ff_logit_ctx', activ='linear')
+                                   prefix='ff_logit_ctx', activ='linear')
     logit = tensor.tanh(logit_lstm+logit_prev+logit_ctx)
     logit = get_layer('ff')[1](tparams, logit, options,
-                               pre='ff_logit', activ='linear')
+                               prefix='ff_logit', activ='linear')
 
     # compute the softmax probability
     next_probs = tensor.nnet.softmax(logit)
@@ -466,12 +465,12 @@ def train(dim_word_src=100,  # source word vector dimensionality
             models_options = pkl.load(f)
 
     print 'Loading data'
-    train = WWIterator(datasets[0], datasets[1],
+    train = WordPairIterator(datasets[0], datasets[1],
                          dictionaries[0], dictionaries[1],
                          n_words_source=n_words_src, n_words_target=n_words,
                          batch_size=batch_size,
                          maxlen=maxlen)
-    valid = WWIterator(valid_datasets[0], valid_datasets[1],
+    valid = WordPairIterator(valid_datasets[0], valid_datasets[1],
                          dictionaries[0], dictionaries[1],
                          n_words_source=n_words_src, n_words_target=n_words,
                          batch_size=valid_batch_size,

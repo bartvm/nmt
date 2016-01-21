@@ -8,8 +8,8 @@ from layers import *
 
 if __name__ == '__main__':
 
-    op = Parameters()
-    with op:
+    options = Parameters()
+    with options:
         batch_sz=2
         n_chars_src=10
         src_char_dim=3
@@ -21,35 +21,35 @@ if __name__ == '__main__':
         trg_h_sent_dim=10
 
     params = OrderedDict()
-    params['Cemb_src'] = norm_weight(op['n_chars_src'], op['src_char_dim'])     
-    params['Cemb_trg'] = norm_weight(op['n_chars_trg'], op['trg_char_dim'])     
-    params = param_init_gru(op,
+    params['Cemb_src'] = norm_weight(options['n_chars_src'], options['src_char_dim'])     
+    params['Cemb_trg'] = norm_weight(options['n_chars_trg'], options['trg_char_dim'])     
+    params = param_init_gru(options,
                             params,
-                            pre='char_enc',
-                            nin=op['src_char_dim'],
-                            dim=op['src_h_word_dim'])
-    params = param_init_gru(op,
+                            prefix='char_enc',
+                            nin=options['src_char_dim'],
+                            dim=options['src_h_word_dim'])
+    params = param_init_gru(options,
                             params,
-                            pre='word_enc',
-                            nin=op['src_h_word_dim'],
-                            dim=op['src_h_sent_dim'])
+                            prefix='word_enc',
+                            nin=options['src_h_word_dim'],
+                            dim=options['src_h_sent_dim'])
 
-    ctxdim = 2 * op['src_h_sent_dim']
+    ctxdim = 2 * options['src_h_sent_dim']
 
-    params = param_init_gru_cond(op,
+    params = param_init_gru_cond(options,
                                 params,
-                                pre='char_dec',
-                                nin=op['trg_char_dim'],
-                                dim=op['trg_h_word_dim'],
+                                prefix='char_dec',
+                                nin=options['trg_char_dim'],
+                                dim=options['trg_h_word_dim'],
                                 dimctx=ctxdim)
-    params = param_init_gru_cond(op,
+    params = param_init_gru_cond(options,
                                 params,
-                                pre='word_dec',
-                                nin=op['trg_h_word_dim'],
-                                dim=op['trg_h_sent_dim'],
+                                prefix='word_dec',
+                                nin=options['trg_h_word_dim'],
+                                dim=options['trg_h_sent_dim'],
                                 dimctx=ctxdim)
 
-    tp = init_tparams(params)
+    tparams = init_tparams(params)
 
     # build a model
     x = tensor.tensor3('x', dtype='int64')
@@ -61,15 +61,15 @@ if __name__ == '__main__':
     n_words_trg = y.shape[1]
     n_sents = x.shape[2]
 
-    emb_src = tp['Cemb_src'][x.flatten()]
-    emb_src = emb_src.reshape([n_chars_src, n_words_src, n_sents, op['src_char_dim']])
+    emb_src = tparams['Cemb_src'][x.flatten()]
+    emb_src = emb_src.reshape([n_chars_src, n_words_src, n_sents, options['src_char_dim']])
 
     #f_emb = theano.function(inputs=[x], outputs=[emb_src])
 
-    char_hidden_states = gru_layer(tp, emb_src, op, pre='char_enc')
+    char_hidden_states = gru_layer(tparams, emb_src, options, prefix='char_enc')
     char_hidden_states = char_hidden_states[0]
 
-    word_hidden_states = gru_layer(tp, char_hidden_states[-1], op, pre='word_enc')
+    word_hidden_states = gru_layer(tparams, char_hidden_states[-1], options, prefix='word_enc')
     word_hidden_states = word_hidden_states[0]
 
     # compile theano functions

@@ -8,12 +8,15 @@ import gzip
 def fopen(filename, mode='r'):
     if filename.endswith('.gz'):
         zf = gzip.open(filename, mode)
-        return codecs.getreader('utf-8')
+        return codecs.getreader('utf-8')(zf)
     return codecs.open(filename, mode, encoding='utf-8')
 
 
-class WWIterator:
-    """Simple Bitext iterator."""
+class WordPairIterator:
+    """
+        Iterator over a pair of words in the source and the target language
+        
+    """
     def __init__(self, source, target,
                  source_dict, target_dict,
                  batch_size=128,
@@ -126,8 +129,11 @@ class WWIterator:
 
         return source, target
 
-class WCIterator:
-    """Simple Bitext iterator."""
+class WordCharPairIterator:
+    """
+        Iterator over source words and target characters
+
+    """
     def __init__(self, source, target,
                  source_dict, target_dict,
                  batch_size=128,

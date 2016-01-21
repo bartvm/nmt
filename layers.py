@@ -57,43 +57,43 @@ def _gru(m_, x_, xx_, h_, U, Ux, bg=None, bi=None):
     return h
 
 # feedforward layer: affine transformation + point-wise nonlinearity
-def param_init_fflayer(options, prm, pre='ff', nin=None, nout=None,
+def param_init_fflayer(options, param, prefix='ff', nin=None, nout=None,
                        ortho=True):
 
-    prm[pre+'_W'] = uniform_weight(nin, nout)
-    prm[pre+'_b'] = zero_vector(nout)
+    param[prefix+'_W'] = uniform_weight(nin, nout)
+    param[prefix+'_b'] = zero_vector(nout)
 
-    return prm
+    return param
 
 
-def fflayer(tp, state_below, options, pre='rconv',
+def fflayer(tparams, state_below, options, prefix='rconv',
             activ='lambda x: T.tanh(x)', **kwargs):
     return eval(activ)(
-        T.dot(state_below, tp[pre+'_W']) + tp[pre+'_b'])
+        T.dot(state_below, tparams[prefix+'_W']) + tparams[prefix+'_b'])
 
 
 # GRU layer
-def param_init_gru(options, prm, pre='gru', nin=None, dim=None):
+def param_init_gru(options, param, prefix='gru', nin=None, dim=None):
 
-    prm[pre+'_W'] = numpy.concatenate([
+    param[prefix+'_W'] = numpy.concatenate([
                     uniform_weight(nin, dim),
                     uniform_weight(nin, dim)
                     ], axis=1)
-    prm[pre+'_U'] = numpy.concatenate([
+    param[prefix+'_U'] = numpy.concatenate([
                     ortho_weight(dim),
                     ortho_weight(dim)
                     ], axis=1)
-    prm[pre+'_b'] = zero_vector(2*dim)
+    param[prefix+'_b'] = zero_vector(2*dim)
 
 
-    prm[pre+'_Wx'] = uniform_weight(nin, dim)
-    prm[pre+'_Ux'] = ortho_weight(dim)
-    prm[pre+'_bx'] = zero_vector(dim)
+    param[prefix+'_Wx'] = uniform_weight(nin, dim)
+    param[prefix+'_Ux'] = ortho_weight(dim)
+    param[prefix+'_bx'] = zero_vector(dim)
 
-    return prm
+    return param
 
 
-def gru_layer(tp, state_below, options, pre='gru', mask=None,
+def gru_layer(tparams, state_below, options, prefix='gru', mask=None,
               **kwargs):
     nsteps = state_below.shape[0]
     if state_below.ndim == 4:
@@ -103,14 +103,14 @@ def gru_layer(tp, state_below, options, pre='gru', mask=None,
     else:
         n_samples = 1
 
-    dim = tp[pre+'_Ux'].shape[1]
+    dim = tparams[prefix+'_Ux'].shape[1]
 
     if mask is None:
         mask = T.alloc(1., state_below.shape[0], 1)
 
     # state_below is the input word embeddings
-    state_below_ = T.dot(state_below, tp[pre+'_W']) + tp[pre+'_b']
-    state_belowx = T.dot(state_below, tp[pre+'_Wx']) + tp[pre+'_bx']
+    state_below_ = T.dot(state_below, tparams[prefix+'_W']) + tparams[prefix+'_b']
+    state_belowx = T.dot(state_below, tparams[prefix+'_Wx']) + tparams[prefix+'_bx']
 
     # prepare scan arguments
     seqs = [mask, state_below_, state_belowx]
@@ -121,13 +121,13 @@ def gru_layer(tp, state_below, options, pre='gru', mask=None,
         init_states = [T.alloc(0., n_samples, dim)]
 
     _step = _gru
-    shared_vars = [tp[pre+'_U'],tp[pre+'_Ux']]
+    shared_vars = [tparams[prefix+'_U'],tparams[prefix+'_Ux']]
 
     rval, updates = theano.scan(_step,
                                 sequences=seqs,
                                 outputs_info=init_states,
                                 non_sequences=shared_vars,
-                                name=pre+'_layers',
+                                name=prefix+'_layers',
                                 n_steps=nsteps,
                                 profile=profile,
                                 strict=True)
@@ -136,7 +136,7 @@ def gru_layer(tp, state_below, options, pre='gru', mask=None,
 
 
 # Conditional GRU layer with Attention
-def param_init_gru_cond(options, prm, pre='gru_cond',
+def param_init_gru_cond(options, param, prefix='gru_cond',
                         nin=None, dim=None, dimctx=None,
                         nin_nonlin=None, dim_nonlin=None):
     if nin_nonlin is None:
@@ -145,38 +145,38 @@ def param_init_gru_cond(options, prm, pre='gru_cond',
         dim_nonlin = dim
 
 
-    prm = param_init_gru(options, prm, pre=pre, nin=nin, dim=dim)
+    param = param_init_gru(options, param, prefix=prefix, nin=nin, dim=dim)
 
-    prm[pre+'_U_nl'] = numpy.concatenate([
+    param[prefix+'_U_nl'] = numpy.concatenate([
                         ortho_weight(dim_nonlin),
                         ortho_weight(dim_nonlin)
                         ], axis=1)
-    prm[pre+'_b_nl'] = zero_vector(2 * dim_nonlin)
+    param[prefix+'_b_nl'] = zero_vector(2 * dim_nonlin)
 
-    prm[pre+'_Ux_nl'] = ortho_weight(dim_nonlin)
-    prm[pre+'_bx_nl'] = zero_vector(dim_nonlin)
+    param[prefix+'_Ux_nl'] = ortho_weight(dim_nonlin)
+    param[prefix+'_bx_nl'] = zero_vector(dim_nonlin)
 
     # context to LSTM
-    prm[pre+'_Wc'] = uniform_weight(dimctx, dim*2)
-    prm[pre+'_Wcx'] = uniform_weight(dimctx, dim)
+    param[prefix+'_Wc'] = uniform_weight(dimctx, dim*2)
+    param[prefix+'_Wcx'] = uniform_weight(dimctx, dim)
 
     # attention: combined -> hidden
-    prm[pre+'_W_comb_att'] = uniform_weight(dim, dimctx)
+    param[prefix+'_W_comb_att'] = uniform_weight(dim, dimctx)
 
     # attention: context -> hidden
-    prm[pre+'_Wc_att'] = uniform_weight(dimctx,dimctx)
+    param[prefix+'_Wc_att'] = uniform_weight(dimctx,dimctx)
 
     # attention: hidden bias
-    prm[pre+'_b_att'] = zero_vector(dimctx)
+    param[prefix+'_b_att'] = zero_vector(dimctx)
 
     # attention:
-    prm[pre+'_U_att'] = uniform_weight(dimctx, 1)
-    prm[pre+'_c_att'] = zero_vector(1)
+    param[prefix+'_U_att'] = uniform_weight(dimctx, 1)
+    param[prefix+'_c_att'] = zero_vector(1)
 
-    return prm
+    return param
 
 
-def gru_cond_layer(tp, state_below, options, pre='gru',
+def gru_cond_layer(tparams, state_below, options, prefix='gru',
                    mask=None, context=None, one_step=False,
                    init_memory=None, init_state=None,
                    context_mask=None,
@@ -199,7 +199,7 @@ def gru_cond_layer(tp, state_below, options, pre='gru',
     if mask is None:
         mask = T.alloc(1., state_below.shape[0], 1)
 
-    dim = tp[pre+'_Wcx'].shape[1]
+    dim = tparams[prefix+'_Wcx'].shape[1]
 
     # initial/previous state
     if init_state is None:
@@ -211,11 +211,11 @@ def gru_cond_layer(tp, state_below, options, pre='gru',
     # projected context
     assert context.ndim == 3, \
         'Context must be 3-d: #annotation x #sample x dim'
-    pctx_ = T.dot(context, tp[pre+'_Wc_att']) + tp[pre+'_b_att']
+    pctx_ = T.dot(context, tparams[prefix+'_Wc_att']) + tparams[prefix+'_b_att']
 
     # projected x
-    state_belowx = T.dot(state_below, tp[pre+'_Wx']) + tp[pre+'_bx']
-    state_below_ = T.dot(state_below, tp[pre+'_W']) + tp[pre+'_b']
+    state_belowx = T.dot(state_below, tparams[prefix+'_Wx']) + tparams[prefix+'_bx']
+    state_below_ = T.dot(state_below, tparams[prefix+'_W']) + tparams[prefix+'_b']
 
     def _step_slice(m_, x_, xx_, h_, ctx_, alpha_, pctx_, cc_,
                     U, Wc, W_comb_att, U_att, c_att, Ux, Wcx,
@@ -246,17 +246,17 @@ def gru_cond_layer(tp, state_below, options, pre='gru',
     seqs = [mask, state_below_, state_belowx]
     _step = _step_slice
 
-    shared_vars = [tp[pre+'_U'],
-                   tp[pre+'_Wc'],
-                   tp[pre+'_W_comb_att'],
-                   tp[pre+'_U_att'],
-                   tp[pre+'_c_att'],
-                   tp[pre+'_Ux'],
-                   tp[pre+'_Wcx'],
-                   tp[pre+'_U_nl'],
-                   tp[pre+'_Ux_nl'],
-                   tp[pre+'_b_nl'],
-                   tp[pre+'_bx_nl']]
+    shared_vars = [tparams[prefix+'_U'],
+                   tparams[prefix+'_Wc'],
+                   tparams[prefix+'_W_comb_att'],
+                   tparams[prefix+'_U_att'],
+                   tparams[prefix+'_c_att'],
+                   tparams[prefix+'_Ux'],
+                   tparams[prefix+'_Wcx'],
+                   tparams[prefix+'_U_nl'],
+                   tparams[prefix+'_Ux_nl'],
+                   tparams[prefix+'_b_nl'],
+                   tparams[prefix+'_bx_nl']]
 
     if one_step:
         rval = _step(*(seqs + [init_state, None, None, pctx_, context] + shared_vars))
@@ -267,7 +267,7 @@ def gru_cond_layer(tp, state_below, options, pre='gru',
                                                   T.alloc(0., n_samples, context.shape[2]),
                                                   T.alloc(0., n_samples, context.shape[0])],
                                     non_sequences=[pctx_, context]+shared_vars,
-                                    name=pre+'_layers',
+                                    name=prefix+'_layers',
                                     n_steps=nsteps,
                                     profile=profile,
                                     strict=True)
