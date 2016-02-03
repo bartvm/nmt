@@ -5,3 +5,5 @@ Included
 
 - Implementation of getting embeddings for unknown words from the context
 - Highway Networks
+
+Thanks to @Jinseok for debugging ;)
