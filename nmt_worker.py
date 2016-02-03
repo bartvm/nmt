@@ -533,6 +533,7 @@ def train(dim_word=100,
 	
           use_dropout=False,
 	  overwrite=False,
+	  valid_sync=False,
           reload_=False):
 
     worker = Worker(control_port=5567)
