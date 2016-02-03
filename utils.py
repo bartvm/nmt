@@ -1,6 +1,7 @@
 import theano
 import theano.tensor as tensor
 import warnings
+import six
 import pickle
 
 import numpy
@@ -10,21 +11,21 @@ from collections import OrderedDict
 
 # push parameters to Theano shared variables
 def zipp(params, tparams):
-    for kk, vv in params.iteritems():
+    for kk, vv in six.iteritems(params):
         tparams[kk].set_value(vv)
 
 
 # pull parameters from Theano shared variables
 def unzip(zipped):
     new_params = OrderedDict()
-    for kk, vv in zipped.iteritems():
+    for kk, vv in six.iteritems(zipped):
         new_params[kk] = vv.get_value()
     return new_params
 
 
 # get the list of parameters: Note that tparams must be OrderedDict
 def itemlist(tparams):
-    return [vv for kk, vv in tparams.iteritems()]
+    return [vv for kk, vv in six.iteritems(tparams)]
 
 
 # dropout
@@ -42,7 +43,7 @@ def dropout_layer(state_before, use_noise, trng):
 # initialize Theano shared variables according to the initial parameters
 def init_tparams(params):
     tparams = OrderedDict()
-    for kk, pp in params.iteritems():
+    for kk, pp in six.iteritems(params):
         tparams[kk] = theano.shared(params[kk], name=kk)
     return tparams
 
@@ -50,7 +51,7 @@ def init_tparams(params):
 # load parameters
 def load_params(path, params):
     pp = numpy.load(path)
-    for kk, vv in params.iteritems():
+    for kk, vv in six.iteritems(params):
         if kk not in pp:
             warnings.warn('%s is not in the archive' % kk)
             continue

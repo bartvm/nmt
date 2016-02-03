@@ -6,6 +6,7 @@ import theano
 import theano.tensor as tensor
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 
+import six
 from six.moves import cPickle as pkl
 import ipdb
 import numpy
@@ -529,7 +530,7 @@ def train(dim_word_src=100,  # source word vector dimensionality
         with open(dd, 'rb') as f:
             worddicts[ii] = pkl.load(f, encoding='latin')
         worddicts_r[ii] = dict()
-        for kk, vv in worddicts[ii].iteritems():
+        for kk, vv in six.iteritems(worddicts[ii]):
             worddicts_r[ii][vv] = kk
 
     # reload options
@@ -584,7 +585,7 @@ def train(dim_word_src=100,  # source word vector dimensionality
     if decay_c > 0.:
         decay_c = theano.shared(numpy.float32(decay_c), name='decay_c')
         weight_decay = 0.
-        for kk, vv in tparams.iteritems():
+        for kk, vv in six.iteritems(tparams):
             weight_decay += (vv**2).sum()
         weight_decay *= decay_c
         cost += weight_decay
