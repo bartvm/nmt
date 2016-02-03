@@ -8,6 +8,7 @@ from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 
 import six
 from six.moves import cPickle as pkl
+from six.moves import xrange
 import ipdb
 import numpy
 import copy

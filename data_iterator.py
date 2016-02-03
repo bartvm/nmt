@@ -2,6 +2,7 @@ import numpy
 import codecs
 
 from six.moves import cPickle as pkl
+from six.moves import xrange
 import gzip
 
 
