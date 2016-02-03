@@ -1,3 +1,4 @@
+from __future__ import print_function
 import numpy
 import cPickle as pkl
 import codecs
@@ -9,7 +10,7 @@ from collections import OrderedDict
 
 def main():
     for filename in sys.argv[1:]:
-        print 'Processing', filename
+        print('Processing', filename)
         char_freqs = OrderedDict()
         with codecs.open(filename, 'r', encoding='utf-8') as f:
             for line in f:
@@ -35,7 +36,7 @@ def main():
         with open('%s.pkl' % filename, 'wb') as f:
             pkl.dump(chardict, f)
 
-        print 'Done'
+        print('Done')
 
 
 if __name__ == '__main__':

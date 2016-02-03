@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+from __future__ import print_function
 import theano
 import numpy as np
 
@@ -142,7 +143,7 @@ if __name__ == '__main__':
             in a set of sentences: expected: %d, actual: %d' \
         % (n_chars_src, len(ret_char_hidden_states))
 
-    print ret_char_hidden_states[0].shape
+    print(ret_char_hidden_states[0].shape)
 
     ret_word_hidden_states = f_encode_sent(src_sentences)[0]
 
@@ -151,7 +152,7 @@ if __name__ == '__main__':
             in a set of sentences: expected: %d, actual: %d' \
         % (n_words_src, len(ret_word_hidden_states))
 
-    print ret_word_hidden_states[0].shape
-    print len(ret_word_hidden_states)
+    print(ret_word_hidden_states[0].shape)
+    print(len(ret_word_hidden_states))
 
     # decoding starts
