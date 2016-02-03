@@ -24,6 +24,7 @@ from layers import *
 import settings
 profile = settings.profile
 
+
 # batch preparation
 def prepare_data(seqs_x, seqs_y, maxlen=None):
     # x: a list of sentences
@@ -59,9 +60,9 @@ def prepare_data(seqs_x, seqs_y, maxlen=None):
     y_mask = numpy.zeros((maxlen_y, n_samples)).astype('float32')
     for idx, [s_x, s_y] in enumerate(zip(seqs_x, seqs_y)):
         x[:lengths_x[idx], idx] = s_x
-        x_mask[:lengths_x[idx]+1, idx] = 1.
+        x_mask[:lengths_x[idx] + 1, idx] = 1.
         y[:lengths_y[idx], idx] = s_y
-        y_mask[:lengths_y[idx]+1, idx] = 1.
+        y_mask[:lengths_y[idx] + 1, idx] = 1.
 
     return x, x_mask, y, y_mask
 
@@ -71,40 +72,59 @@ def init_params(options):
     params = OrderedDict()
 
     # embedding
-    params['Wemb'] = norm_weight(options['n_words_src'], options['dim_word_src'])
-    params['Wemb_dec'] = norm_weight(options['n_words'], options['dim_word_trg'])
+    params['Wemb'] = norm_weight(options['n_words_src'],
+                                 options['dim_word_src'])
+    params['Wemb_dec'] = norm_weight(options['n_words'],
+                                     options['dim_word_trg'])
 
     # encoder: bidirectional RNN
-    params = get_layer(options['encoder'])[0](options, params,
+    params = get_layer(options['encoder'])[0](options,
+                                              params,
                                               prefix='encoder',
                                               nin=options['dim_word_src'],
                                               dim=options['dim'])
-    params = get_layer(options['encoder'])[0](options, params,
+    params = get_layer(options['encoder'])[0](options,
+                                              params,
                                               prefix='encoder_r',
                                               nin=options['dim_word_src'],
                                               dim=options['dim'])
     ctxdim = 2 * options['dim']
 
     # init_state, init_cell
-    params = get_layer('ff')[0](options, params, prefix='ff_state',
-                                nin=ctxdim, nout=options['dim'])
+    params = get_layer('ff')[0](options,
+                                params,
+                                prefix='ff_state',
+                                nin=ctxdim,
+                                nout=options['dim'])
     # decoder
-    params = get_layer(options['decoder'])[0](options, params,
+    params = get_layer(options['decoder'])[0](options,
+                                              params,
                                               prefix='decoder',
                                               nin=options['dim_word_trg'],
                                               dim=options['dim'],
                                               dimctx=ctxdim)
     # readout
-    params = get_layer('ff')[0](options, params, prefix='ff_logit_lstm',
-                                nin=options['dim'], nout=options['dim_word_trg'],
+    params = get_layer('ff')[0](options,
+                                params,
+                                prefix='ff_logit_lstm',
+                                nin=options['dim'],
+                                nout=options['dim_word_trg'],
                                 ortho=False)
-    params = get_layer('ff')[0](options, params, prefix='ff_logit_prev',
+    params = get_layer('ff')[0](options,
+                                params,
+                                prefix='ff_logit_prev',
                                 nin=options['dim_word_trg'],
-                                nout=options['dim_word_trg'], ortho=False)
-    params = get_layer('ff')[0](options, params, prefix='ff_logit_ctx',
-                                nin=ctxdim, nout=options['dim_word_trg'],
+                                nout=options['dim_word_trg'],
                                 ortho=False)
-    params = get_layer('ff')[0](options, params, prefix='ff_logit',
+    params = get_layer('ff')[0](options,
+                                params,
+                                prefix='ff_logit_ctx',
+                                nin=ctxdim,
+                                nout=options['dim_word_trg'],
+                                ortho=False)
+    params = get_layer('ff')[0](options,
+                                params,
+                                prefix='ff_logit',
                                 nin=options['dim_word_trg'],
                                 nout=options['n_words'])
 
@@ -135,18 +155,22 @@ def build_model(tparams, options):
     # word embedding for forward rnn (source)
     emb = tparams['Wemb'][x.flatten()]
     emb = emb.reshape([n_timesteps, n_samples, options['dim_word_src']])
-    proj = get_layer(options['encoder'])[1](tparams, emb, options,
+    proj = get_layer(options['encoder'])[1](tparams,
+                                            emb,
+                                            options,
                                             prefix='encoder',
                                             mask=x_mask)
     # word embedding for backward rnn (source)
     embr = tparams['Wemb'][xr.flatten()]
     embr = embr.reshape([n_timesteps, n_samples, options['dim_word_src']])
-    projr = get_layer(options['encoder'])[1](tparams, embr, options,
+    projr = get_layer(options['encoder'])[1](tparams,
+                                             embr,
+                                             options,
                                              prefix='encoder_r',
                                              mask=xr_mask)
 
     # context will be the concatenation of forward and backward rnns
-    ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim-1)
+    ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim - 1)
 
     # mean of the context (across time) will be used to initialize decoder rnn
     ctx_mean = (ctx * x_mask[:, :, None]).sum(0) / x_mask.sum(0)[:, None]
@@ -155,8 +179,11 @@ def build_model(tparams, options):
     # ctx_mean = concatenate([proj[0][-1], projr[0][-1]], axis=proj[0].ndim-2)
 
     # initial decoder state
-    init_state = get_layer('ff')[1](tparams, ctx_mean, options,
-                                    prefix='ff_state', activ='tanh')
+    init_state = get_layer('ff')[1](tparams,
+                                    ctx_mean,
+                                    options,
+                                    prefix='ff_state',
+                                    activ='tanh')
 
     # word embedding (target), we will shift the target sequence one time step
     # to the right. This is done because of the bi-gram connections in the
@@ -169,9 +196,12 @@ def build_model(tparams, options):
     emb = emb_shifted
 
     # decoder - pass through the decoder conditional gru with attention
-    proj = get_layer(options['decoder'])[1](tparams, emb, options,
+    proj = get_layer(options['decoder'])[1](tparams,
+                                            emb,
+                                            options,
                                             prefix='decoder',
-                                            mask=y_mask, context=ctx,
+                                            mask=y_mask,
+                                            context=ctx,
                                             context_mask=x_mask,
                                             one_step=False,
                                             init_state=init_state)
@@ -185,19 +215,31 @@ def build_model(tparams, options):
     opt_ret['dec_alphas'] = proj[2]
 
     # compute word probabilities
-    logit_lstm = get_layer('ff')[1](tparams, proj_h, options,
-                                    prefix='ff_logit_lstm', activ='linear')
-    logit_prev = get_layer('ff')[1](tparams, emb, options,
-                                    prefix='ff_logit_prev', activ='linear')
-    logit_ctx = get_layer('ff')[1](tparams, ctxs, options,
-                                   prefix='ff_logit_ctx', activ='linear')
-    logit = tensor.tanh(logit_lstm+logit_prev+logit_ctx)
+    logit_lstm = get_layer('ff')[1](tparams,
+                                    proj_h,
+                                    options,
+                                    prefix='ff_logit_lstm',
+                                    activ='linear')
+    logit_prev = get_layer('ff')[1](tparams,
+                                    emb,
+                                    options,
+                                    prefix='ff_logit_prev',
+                                    activ='linear')
+    logit_ctx = get_layer('ff')[1](tparams,
+                                   ctxs,
+                                   options,
+                                   prefix='ff_logit_ctx',
+                                   activ='linear')
+    logit = tensor.tanh(logit_lstm + logit_prev + logit_ctx)
     if options['use_dropout']:
         logit = dropout_layer(logit, use_noise, trng)
-    logit = get_layer('ff')[1](tparams, logit, options, 
-                               prefix='ff_logit', activ='linear')
+    logit = get_layer('ff')[1](tparams,
+                               logit,
+                               options,
+                               prefix='ff_logit',
+                               activ='linear')
     logit_shp = logit.shape
-    probs = tensor.nnet.softmax(logit.reshape([logit_shp[0]*logit_shp[1],
+    probs = tensor.nnet.softmax(logit.reshape([logit_shp[0] * logit_shp[1],
                                                logit_shp[2]]))
 
     # cost
@@ -224,19 +266,26 @@ def build_sampler(tparams, options, trng):
     embr = embr.reshape([n_timesteps, n_samples, options['dim_word_src']])
 
     # encoder
-    proj = get_layer(options['encoder'])[1](tparams, emb, options,
+    proj = get_layer(options['encoder'])[1](tparams,
+                                            emb,
+                                            options,
                                             prefix='encoder')
-    projr = get_layer(options['encoder'])[1](tparams, embr, options,
+    projr = get_layer(options['encoder'])[1](tparams,
+                                             embr,
+                                             options,
                                              prefix='encoder_r')
 
     # concatenate forward and backward rnn hidden states
-    ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim-1)
+    ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim - 1)
 
     # get the input for decoder rnn initializer mlp
     ctx_mean = ctx.mean(0)
     # ctx_mean = concatenate([proj[0][-1],projr[0][-1]], axis=proj[0].ndim-2)
-    init_state = get_layer('ff')[1](tparams, ctx_mean, options,
-                                    prefix='ff_state', activ='tanh')
+    init_state = get_layer('ff')[1](tparams,
+                                    ctx_mean,
+                                    options,
+                                    prefix='ff_state',
+                                    activ='tanh')
 
     print 'Building f_init...',
     outs = [init_state, ctx]
@@ -253,9 +302,12 @@ def build_sampler(tparams, options, trng):
                         tparams['Wemb_dec'][y])
 
     # apply one step of conditional gru with attention
-    proj = get_layer(options['decoder'])[1](tparams, emb, options,
+    proj = get_layer(options['decoder'])[1](tparams,
+                                            emb,
+                                            options,
                                             prefix='decoder',
-                                            mask=None, context=ctx,
+                                            mask=None,
+                                            context=ctx,
                                             one_step=True,
                                             init_state=init_state)
     # get the next hidden state
@@ -264,15 +316,27 @@ def build_sampler(tparams, options, trng):
     # get the weighted averages of context for this target word y
     ctxs = proj[1]
 
-    logit_lstm = get_layer('ff')[1](tparams, next_state, options,
-                                    prefix='ff_logit_lstm', activ='linear')
-    logit_prev = get_layer('ff')[1](tparams, emb, options,
-                                    prefix='ff_logit_prev', activ='linear')
-    logit_ctx = get_layer('ff')[1](tparams, ctxs, options,
-                                   prefix='ff_logit_ctx', activ='linear')
-    logit = tensor.tanh(logit_lstm+logit_prev+logit_ctx)
-    logit = get_layer('ff')[1](tparams, logit, options,
-                               prefix='ff_logit', activ='linear')
+    logit_lstm = get_layer('ff')[1](tparams,
+                                    next_state,
+                                    options,
+                                    prefix='ff_logit_lstm',
+                                    activ='linear')
+    logit_prev = get_layer('ff')[1](tparams,
+                                    emb,
+                                    options,
+                                    prefix='ff_logit_prev',
+                                    activ='linear')
+    logit_ctx = get_layer('ff')[1](tparams,
+                                   ctxs,
+                                   options,
+                                   prefix='ff_logit_ctx',
+                                   activ='linear')
+    logit = tensor.tanh(logit_lstm + logit_prev + logit_ctx)
+    logit = get_layer('ff')[1](tparams,
+                               logit,
+                               options,
+                               prefix='ff_logit',
+                               activ='linear')
 
     # compute the softmax probability
     next_probs = tensor.nnet.softmax(logit)
@@ -293,8 +357,16 @@ def build_sampler(tparams, options, trng):
 
 # generate sample, either with stochastic sampling or beam search. Note that,
 # this function iteratively calls f_init and f_next functions.
-def gen_sample(tparams, f_init, f_next, x, options, trng=None, k=1, maxlen=30,
-               stochastic=True, argmax=False):
+def gen_sample(tparams,
+               f_init,
+               f_next,
+               x,
+               options,
+               trng=None,
+               k=1,
+               maxlen=30,
+               stochastic=True,
+               argmax=False):
 
     # k is the beam size we have
     if k > 1:
@@ -316,7 +388,7 @@ def gen_sample(tparams, f_init, f_next, x, options, trng=None, k=1, maxlen=30,
     # get initial state of decoder rnn and encoder context
     ret = f_init(x)
     next_state, ctx0 = ret[0], ret[1]
-    next_w = -1 * numpy.ones((1,)).astype('int64')  # bos indicator
+    next_w = -1 * numpy.ones((1, )).astype('int64')  # bos indicator
 
     for ii in xrange(maxlen):
         ctx = numpy.tile(ctx0, [live_k, 1])
@@ -336,7 +408,7 @@ def gen_sample(tparams, f_init, f_next, x, options, trng=None, k=1, maxlen=30,
         else:
             cand_scores = hyp_scores[:, None] - numpy.log(next_p)
             cand_flat = cand_scores.flatten()
-            ranks_flat = cand_flat.argsort()[:(k-dead_k)]
+            ranks_flat = cand_flat.argsort()[:(k - dead_k)]
 
             voc_size = next_p.shape[1]
             trans_indices = ranks_flat / voc_size
@@ -344,11 +416,11 @@ def gen_sample(tparams, f_init, f_next, x, options, trng=None, k=1, maxlen=30,
             costs = cand_flat[ranks_flat]
 
             new_hyp_samples = []
-            new_hyp_scores = numpy.zeros(k-dead_k).astype('float32')
+            new_hyp_scores = numpy.zeros(k - dead_k).astype('float32')
             new_hyp_states = []
 
             for idx, [ti, wi] in enumerate(zip(trans_indices, word_indices)):
-                new_hyp_samples.append(hyp_samples[ti]+[wi])
+                new_hyp_samples.append(hyp_samples[ti] + [wi])
                 new_hyp_scores[idx] = copy.copy(costs[idx])
                 new_hyp_states.append(copy.copy(next_state[ti]))
 
@@ -408,7 +480,7 @@ def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=True):
             ipdb.set_trace()
 
         if verbose:
-            print >>sys.stderr, '%d samples computed' % (n_done)
+            print >> sys.stderr, '%d samples computed' % (n_done)
 
     return numpy.array(probs)
 
@@ -465,16 +537,22 @@ def train(dim_word_src=100,  # source word vector dimensionality
             models_options = pkl.load(f)
 
     print 'Loading data'
-    train = WordPairIterator(datasets[0], datasets[1],
-                         dictionaries[0], dictionaries[1],
-                         n_words_source=n_words_src, n_words_target=n_words,
-                         batch_size=batch_size,
-                         maxlen=maxlen)
-    valid = WordPairIterator(valid_datasets[0], valid_datasets[1],
-                         dictionaries[0], dictionaries[1],
-                         n_words_source=n_words_src, n_words_target=n_words,
-                         batch_size=valid_batch_size,
-                         maxlen=maxlen)
+    train = WordPairIterator(datasets[0],
+                             datasets[1],
+                             dictionaries[0],
+                             dictionaries[1],
+                             n_words_source=n_words_src,
+                             n_words_target=n_words,
+                             batch_size=batch_size,
+                             maxlen=maxlen)
+    valid = WordPairIterator(valid_datasets[0],
+                             valid_datasets[1],
+                             dictionaries[0],
+                             dictionaries[1],
+                             n_words_source=n_words_src,
+                             n_words_target=n_words,
+                             batch_size=valid_batch_size,
+                             maxlen=maxlen)
 
     print 'Building model'
     params = init_params(model_options)
@@ -506,16 +584,16 @@ def train(dim_word_src=100,  # source word vector dimensionality
         decay_c = theano.shared(numpy.float32(decay_c), name='decay_c')
         weight_decay = 0.
         for kk, vv in tparams.iteritems():
-            weight_decay += (vv ** 2).sum()
+            weight_decay += (vv**2).sum()
         weight_decay *= decay_c
         cost += weight_decay
 
     # regularize the alpha weights
     if alpha_c > 0. and not model_options['decoder'].endswith('simple'):
         alpha_c = theano.shared(numpy.float32(alpha_c), name='alpha_c')
-        alpha_reg = alpha_c * (
-            (tensor.cast(y_mask.sum(0)//x_mask.sum(0), 'float32')[:, None] -
-             opt_ret['dec_alphas'].sum(0))**2).sum(1).mean()
+        alpha_reg = alpha_c * ((tensor.cast(
+            y_mask.sum(0) // x_mask.sum(0), 'float32')[:, None] -
+                                opt_ret['dec_alphas'].sum(0))**2).sum(1).mean()
         cost += alpha_reg
 
     # after all regularizers - compile the computational graph for cost
@@ -534,9 +612,8 @@ def train(dim_word_src=100,  # source word vector dimensionality
             g2 += (g**2).sum()
         new_grads = []
         for g in grads:
-            new_grads.append(tensor.switch(g2 > (clip_c**2),
-                                           g / tensor.sqrt(g2) * clip_c,
-                                           g))
+            new_grads.append(tensor.switch(g2 > (clip_c**2), g / tensor.sqrt(
+                g2) * clip_c, g))
         grads = new_grads
 
     # compile the optimizer, the actual computational graph is compiled here
@@ -555,11 +632,11 @@ def train(dim_word_src=100,  # source word vector dimensionality
     bad_counter = 0
 
     if validFreq == -1:
-        validFreq = len(train[0])/batch_size
+        validFreq = len(train[0]) / batch_size
     if saveFreq == -1:
-        saveFreq = len(train[0])/batch_size
+        saveFreq = len(train[0]) / batch_size
     if sampleFreq == -1:
-        sampleFreq = len(train[0])/batch_size
+        sampleFreq = len(train[0]) / batch_size
 
     uidx = 0
     estop = False
@@ -615,9 +692,13 @@ def train(dim_word_src=100,  # source word vector dimensionality
                 # FIXME: random selection?
                 for jj in xrange(numpy.minimum(5, x.shape[1])):
                     stochastic = True
-                    sample, score = gen_sample(tparams, f_init, f_next,
+                    sample, score = gen_sample(tparams,
+                                               f_init,
+                                               f_next,
                                                x[:, jj][:, None],
-                                               model_options, trng=trng, k=1,
+                                               model_options,
+                                               trng=trng,
+                                               k=1,
                                                maxlen=30,
                                                stochastic=stochastic,
                                                argmax=False)
@@ -693,13 +774,14 @@ def train(dim_word_src=100,  # source word vector dimensionality
         zipp(best_p, tparams)
 
     use_noise.set_value(0.)
-    valid_err = pred_probs(f_log_probs, prepare_data,
-                           model_options, valid).mean()
+    valid_err = pred_probs(f_log_probs, prepare_data, model_options,
+                           valid).mean()
 
     print 'Valid ', valid_err
 
     params = copy.copy(best_p)
-    numpy.savez(saveto, zipped_params=best_p,
+    numpy.savez(saveto,
+                zipped_params=best_p,
                 history_errs=history_errs,
                 **params)
 

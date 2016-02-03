@@ -7,6 +7,7 @@ import fileinput
 
 from collections import OrderedDict
 
+
 def main():
     for filename in sys.argv[1:]:
         print 'Processing', filename
@@ -30,12 +31,13 @@ def main():
         chardict['eow'] = 1
         chardict['UNK'] = 2
         for ii, ww in enumerate(sorted_chars):
-            chardict[ww] = ii+n_special_tokens
+            chardict[ww] = ii + n_special_tokens
 
-        with open('%s.pkl'%filename, 'wb') as f:
+        with open('%s.pkl' % filename, 'wb') as f:
             pkl.dump(chardict, f)
 
         print 'Done'
+
 
 if __name__ == '__main__':
     main()
