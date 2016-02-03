@@ -1,6 +1,7 @@
 import numpy
 import codecs
 
+import six
 from six.moves import cPickle as pkl
 from six.moves import xrange
 import gzip
@@ -13,7 +14,7 @@ def fopen(filename, mode='r'):
     return codecs.open(filename, mode, encoding='utf-8')
 
 
-class WordPairIterator:
+class WordPairIterator(six.Iterator):
     """
         Iterator over a pair of words in the source and the target language
 
@@ -54,7 +55,7 @@ class WordPairIterator:
         self.source.seek(0)
         self.target.seek(0)
 
-    def next(self):
+    def __next__(self):
         if self.end_of_data:
             self.end_of_data = False
             self.reset()
@@ -136,7 +137,7 @@ class WordPairIterator:
         return source, target
 
 
-class WordCharPairIterator:
+class WordCharPairIterator(six.Iterator):
     """
         Iterator over source words and target characters
 
@@ -184,7 +185,7 @@ class WordCharPairIterator:
         self.source.seek(0)
         self.target.seek(0)
 
-    def next(self):
+    def __next__(self):
         if self.end_of_data:
             self.end_of_data = False
             self.reset()
