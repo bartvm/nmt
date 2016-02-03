@@ -106,7 +106,7 @@ class NMTController(Controller):
 
 def nmt_control(patience=10,
                 max_epochs=5000,
-                validFreq=50000,
+                validFreq=10000,
                 saveFreq=1000,
                 saveto=None):
 
