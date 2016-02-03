@@ -6,7 +6,7 @@ import theano
 import theano.tensor as tensor
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 
-import cPickle as pkl
+from six.moves import cPickle as pkl
 import ipdb
 import numpy
 import copy
@@ -527,7 +527,7 @@ def train(dim_word_src=100,  # source word vector dimensionality
     worddicts_r = [None] * len(dictionaries)
     for ii, dd in enumerate(dictionaries):
         with open(dd, 'rb') as f:
-            worddicts[ii] = pkl.load(f)
+            worddicts[ii] = pkl.load(f, encoding='latin')
         worddicts_r[ii] = dict()
         for kk, vv in worddicts[ii].iteritems():
             worddicts_r[ii][vv] = kk
@@ -535,7 +535,7 @@ def train(dim_word_src=100,  # source word vector dimensionality
     # reload options
     if reload_ and os.path.exists(saveto):
         with open('%s.pkl' % saveto, 'rb') as f:
-            models_options = pkl.load(f)
+            models_options = pkl.load(f, encoding='latin')
 
     print('Loading data')
     train = WordPairIterator(datasets[0],

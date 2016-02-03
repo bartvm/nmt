@@ -1,7 +1,7 @@
 import numpy
 import codecs
 
-import cPickle as pkl
+from six.moves import cPickle as pkl
 import gzip
 
 
@@ -30,9 +30,9 @@ class WordPairIterator:
         self.source = fopen(source, 'r')
         self.target = fopen(target, 'r')
         with open(source_dict, 'rb') as f:
-            self.source_dict = pkl.load(f)
+            self.source_dict = pkl.load(f, encoding='latin')
         with open(target_dict, 'rb') as f:
-            self.target_dict = pkl.load(f)
+            self.target_dict = pkl.load(f, encoding='latin')
 
         self.batch_size = batch_size
         self.maxlen = maxlen
@@ -153,9 +153,9 @@ class WordCharPairIterator:
         self.source = fopen(source, 'r')
         self.target = fopen(target, 'r')
         with open(source_dict, 'rb') as f:
-            self.source_dict = pkl.load(f)
+            self.source_dict = pkl.load(f, encoding='latin')
         with open(target_dict, 'rb') as f:
-            self.target_dict = pkl.load(f)
+            self.target_dict = pkl.load(f, encoding='latin')
 
         self.batch_size = batch_size
         self.maxlen = maxlen

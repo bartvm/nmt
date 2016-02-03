@@ -168,7 +168,7 @@ class Parameters():
 
     def load(self, filename):
         tparams = self.__dict__['tparams']
-        loaded = pickle.load(open(filename, 'rb'))
+        loaded = pickle.load(open(filename, 'rb'), encoding='latin1')
         for k in loaded:
             tparams[k] = loaded[k]
 

@@ -1,6 +1,6 @@
 from __future__ import print_function
 import numpy
-import cPickle as pkl
+from six.moves import cPickle as pkl
 import codecs
 
 import sys
