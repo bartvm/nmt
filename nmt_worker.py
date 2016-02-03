@@ -26,7 +26,7 @@ from platoon.param_sync import EASGD
 
 
 from collections import OrderedDict
-from data_iterator import WordPairIterator
+from data_iterator import TextIterator
 from utils import *
 from optimizers import *
 from layers import *
@@ -76,6 +76,45 @@ def prepare_data(seqs_x, seqs_y, ctx_len_emb, maxlen=None):
     unk_ctx = get_ctx_matrix(x, ctx_len_emb)
     return x, x_mask, y, y_mask, unk_ctx
 
+def prepare_data2(seqs_x, seqs_y, maxlen=None):
+    lengths_x = [len(s) for s in seqs_x]
+    lengths_y = [len(s) for s in seqs_y]
+        
+    if maxlen is not None:
+        new_seqs_x = []
+        new_seqs_y = []
+        new_lengths_x = []
+        new_lengths_y = []
+        for l_x, s_x, l_y, s_y in zip(lengths_x, seqs_x, lengths_y, seqs_y):
+            if l_x < maxlen and l_y < maxlen:
+                new_seqs_x.append(s_x)
+                new_lengths_x.append(l_x)
+                new_seqs_y.append(s_y)
+                new_lengths_y.append(l_y)
+        lengths_x = new_lengths_x
+        seqs_x = new_seqs_x
+        lengths_y = new_lengths_y
+        seqs_y = new_seqs_y
+	
+        if len(lengths_x) < 1 or len(lengths_y) < 1:
+            return None, None, None, None, None
+
+    n_samples = len(seqs_x)
+    maxlen_x = numpy.max(lengths_x) + 1
+    maxlen_y = numpy.max(lengths_y) + 1
+
+    x = numpy.zeros((maxlen_x, n_samples)).astype('int64')
+    y = numpy.zeros((maxlen_y, n_samples)).astype('int64')
+    x_mask = numpy.zeros((maxlen_x, n_samples)).astype('float32')
+    y_mask = numpy.zeros((maxlen_y, n_samples)).astype('float32')
+    
+    for idx, [s_x, s_y] in enumerate(zip(seqs_x, seqs_y)):
+        x[:lengths_x[idx], idx] = s_x
+        x_mask[:lengths_x[idx]+1, idx] = 1.
+        y[:lengths_y[idx], idx] = s_y
+        y_mask[:lengths_y[idx]+1, idx] = 1.
+   
+    return x, x_mask, y, y_mask
 
 # initialize all parameters
 def init_params(options):
@@ -172,7 +211,10 @@ def build_model(tparams, options):
                                             prefix='encoder',
                                             mask=x_mask)
     # word embedding for backward rnn (source)
-    embr = tparams['Wemb'][xr.flatten()]
+    finalr = final[::-1]
+    embr = c_word_embedding[finalr[:]];
+
+#    embr = tparams['Wemb'][xr.flatten()]
     embr = embr.reshape([n_timesteps, n_samples, options['dim_word_src']])
     projr = get_layer(options['encoder'])[1](tparams, embr, options,
                                              prefix='encoder_r',
@@ -287,12 +329,18 @@ def build_sampler(tparams, options, trng):
     ones_vec = T.switch(T.eq(x_temp, 1), 1, 0)
     cum_sum = T.extra_ops.cumsum(ones_vec)
     final = T.switch(T.eq(x_temp, 1), cum_sum + options['n_words_src'] - 1, x_temp)
-    c_word_embedding = concatenate([tparams['Wemb'], unk_ctx_emb], axis=0)
-    emb = c_word_embedding[final[:]];  
     
+    c_word_embedding = concatenate([tparams['Wemb'], unk_ctx_emb], axis=0)
+    emb = c_word_embedding[final[:]];      
     emb = emb.reshape([n_timesteps, n_samples, options['dim_word_src']])
-    embr = tparams['Wemb'][xr.flatten()]
+    
+
+    finalr = final[::-1]
+    embr = c_word_embedding[finalr[:]];
+
+#    embr = tparams['Wemb'][xr.flatten()]   
     embr = embr.reshape([n_timesteps, n_samples, options['dim_word_src']])
+    
     # encoder
     proj = get_layer(options['encoder'])[1](tparams, emb, options,
                                             prefix='encoder')
@@ -558,12 +606,12 @@ def train(dim_word=100,
             models_options = pkl.load(f)
 
     print 'Loading data'
-    train = WordPairIterator(datasets[0], datasets[1],
+    train = TextIterator(datasets[0], datasets[1],
                          dictionaries[0], dictionaries[1],
                          n_words_source=n_words_src, n_words_target=n_words,
                          batch_size=batch_size,
                          maxlen=maxlen)
-    valid = WordPairIterator(valid_datasets[0], valid_datasets[1],
+    valid = TextIterator(valid_datasets[0], valid_datasets[1],
                          dictionaries[0], dictionaries[1],
                          n_words_source=n_words_src, n_words_target=n_words,
                          batch_size=valid_batch_size,
@@ -672,8 +720,8 @@ def train(dim_word=100,
             	for _, train_index in kf:
 			y = [y_data[t] for t in train_index]
 			x = [x_data[t] for t in train_index]
-                	x, x_mask, y, y_mask, unk_ctx = prepare_data(x, y, ctx_len_emb, maxlen=maxlen)
-                	yield x, x_mask, y, y_mask, unk_ctx
+                	x, x_mask, y, y_mask = prepare_data2(x, y, maxlen=maxlen)
+                	yield x, x_mask, y, y_mask
 	    except:
 			train.end_of_data = False
             		train.reset()
@@ -692,19 +740,20 @@ def train(dim_word=100,
 	if step == 'train':
             	use_noise.set_value(1.)
 		for i in xrange(train_len):
-			x, x_mask, y, y_mask, unk_ctx = next(train_it)
-			if unk_ctx is None:
-        			print 'No unknown word is present ', unk_ctx
-                		continue
-            		# compute cost, grads and copy grads to shared variables
+			x, x_mask, y, y_mask = next(train_it)
 			if x is None:
                 		print 'Minibatch with zero sample under length ', maxlen
                 		continue
-			if len(unk_ctx) == 0:
-                		print 'No unknown word is present ', unk_ctx
-                		continue
 			if len(x) == 0:
                 		print 'No input is present ', x
+                		continue
+			
+                        unk_ctx = get_ctx_matrix(x, ctx_len_emb)
+			if unk_ctx is None:
+        			print 'No unknown word is present ', unk_ctx
+                		continue
+			if len(unk_ctx) == 0:
+                		print 'No unknown word is present ', unk_ctx
                 		continue
 		
 			# compute cost, grads and copy grads to shared variables    
