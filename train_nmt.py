@@ -1,4 +1,3 @@
-import numpy
 import os
 
 from nmt import train
@@ -27,9 +26,10 @@ def main(job_id, params):
         valid_datasets=['/home/%s/data/mt/newstest2011.en.tok' % os.environ[
             'USER'], '/home/%s/data/mt/newstest2011.fr.tok' % os.environ[
                 'USER']],
-        dictionaries=
-        ['/home/%s/data/mt/europarl-v7.fr-en.en.tok.pkl' % os.environ['USER'],
-         '/home/%s/data/mt/europarl-v7.fr-en.fr.tok.pkl' % os.environ['USER']],
+        dictionaries=[('/home/%s/data/mt/'
+                       'europarl-v7.fr-en.en.tok.pkl' % os.environ['USER']),
+                      ('/home/%s/data/mt/'
+                       'europarl-v7.fr-en.fr.tok.pkl' % os.environ['USER'])],
         validFreq=5000,
         dispFreq=500,
         saveFreq=5000,

@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 import theano
-import theano.tensor as T
 import numpy as np
 
 from utils import *
@@ -67,7 +66,7 @@ if __name__ == '__main__':
     emb_src = emb_src.reshape([n_chars_src, n_words_src, n_sents, options[
         'src_char_dim']])
 
-    #f_emb = theano.function(inputs=[x], outputs=[emb_src])
+    # f_emb = theano.function(inputs=[x], outputs=[emb_src])
 
     char_hidden_states = gru_layer(tparams,
                                    emb_src,
@@ -140,8 +139,7 @@ if __name__ == '__main__':
 
     assert len(ret_char_hidden_states) == n_chars_src, \
         'The resulting output should match the maximum number of characters \
-            in a set of sentences: expected: %d, actual: %d'
-     \
+            in a set of sentences: expected: %d, actual: %d' \
         % (n_chars_src, len(ret_char_hidden_states))
 
     print ret_char_hidden_states[0].shape
@@ -150,8 +148,7 @@ if __name__ == '__main__':
 
     assert len(ret_word_hidden_states) == n_words_src, \
         'The resulting output should match the maximum number of words \
-            in a set of sentences: expected: %d, actual: %d'
-     \
+            in a set of sentences: expected: %d, actual: %d' \
         % (n_words_src, len(ret_word_hidden_states))
 
     print ret_word_hidden_states[0].shape

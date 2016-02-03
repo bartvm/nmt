@@ -3,7 +3,6 @@ import cPickle as pkl
 import codecs
 
 import sys
-import fileinput
 
 from collections import OrderedDict
 

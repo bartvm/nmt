@@ -15,7 +15,7 @@ def fopen(filename, mode='r'):
 class WordPairIterator:
     """
         Iterator over a pair of words in the source and the target language
-        
+
     """
 
     def __init__(self,

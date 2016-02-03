@@ -11,7 +11,6 @@ import numpy
 import copy
 
 import os
-import warnings
 import sys
 import time
 
@@ -484,6 +483,7 @@ def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=True):
 
     return numpy.array(probs)
 
+
 def train(dim_word_src=100,  # source word vector dimensionality
           dim_word_trg=100,  # target word vector dimensionality
           dim=1000,  # the number of LSTM units
@@ -651,7 +651,7 @@ def train(dim_word_src=100,  # source word vector dimensionality
             x, x_mask, y, y_mask = prepare_data(x, y, maxlen=maxlen)
 
             if x is None:
-                #print 'Minibatch with zero sample under length ', maxlen
+                # print 'Minibatch with zero sample under length ', maxlen
                 uidx -= 1
                 continue
 

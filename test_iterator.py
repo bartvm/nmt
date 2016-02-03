@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-from data_iterator import WWIterator, WCIterator
+from data_iterator import WCIterator
 from nmt import prepare_data
 
 if __name__ == '__main__':

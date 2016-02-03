@@ -1,11 +1,11 @@
 import theano
 import theano.tensor as tensor
+import warnings
+import pickle
 
 import numpy
 import inspect
 from collections import OrderedDict
-
-import settings
 
 
 # push parameters to Theano shared variables
@@ -131,12 +131,12 @@ def concatenate(tensor_list, axis=0):
 
 class Parameters():
     def __init__(self):
-        #self.__dict__['tparams'] = dict()
+        # self.__dict__['tparams'] = dict()
         self.__dict__['tparams'] = OrderedDict()
 
     def __setattr__(self, name, array):
         tparams = self.__dict__['tparams']
-        #if name not in tparams:
+        # if name not in tparams:
         tparams[name] = array
 
     def __setitem__(self, name, array):
@@ -147,10 +147,10 @@ class Parameters():
 
     def __getattr__(self, name):
         tparams = self.__dict__['tparams']
-        return self.tparams[name]
+        return tparams[name]
 
-    #def __getattr__(self):
-    #return self.get()
+    # def __getattr__(self):
+    # return self.get()
 
     def remove(self, name):
         del self.__dict__['tparams'][name]

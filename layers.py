@@ -260,7 +260,7 @@ def gru_cond_layer(tparams,
         # attention
         pstate_ = T.dot(h1, W_comb_att)
         pctx__ = pctx_ + pstate_[None, :, :]
-        #pctx__ += xc_
+        # pctx__ += xc_
         pctx__ = T.tanh(pctx__)
         alpha = T.dot(pctx__, U_att) + c_att
         alpha = alpha.reshape([alpha.shape[0], alpha.shape[1]])
