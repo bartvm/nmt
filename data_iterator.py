@@ -1,7 +1,9 @@
 import numpy
 import codecs
 
-import cPickle as pkl
+import six
+from six.moves import cPickle as pkl
+from six.moves import xrange
 import gzip
 
 
@@ -12,13 +14,17 @@ def fopen(filename, mode='r'):
     return codecs.open(filename, mode, encoding='utf-8')
 
 
-class WordPairIterator:
+class WordPairIterator(six.Iterator):
     """
         Iterator over a pair of words in the source and the target language
-        
+
     """
-    def __init__(self, source, target,
-                 source_dict, target_dict,
+
+    def __init__(self,
+                 source,
+                 target,
+                 source_dict,
+                 target_dict,
                  batch_size=128,
                  maxlen=100,
                  n_words_source=-1,
@@ -26,9 +32,9 @@ class WordPairIterator:
         self.source = fopen(source, 'r')
         self.target = fopen(target, 'r')
         with open(source_dict, 'rb') as f:
-            self.source_dict = pkl.load(f)
+            self.source_dict = pkl.load(f, encoding='latin')
         with open(target_dict, 'rb') as f:
-            self.target_dict = pkl.load(f)
+            self.target_dict = pkl.load(f, encoding='latin')
 
         self.batch_size = batch_size
         self.maxlen = maxlen
@@ -49,7 +55,7 @@ class WordPairIterator:
         self.source.seek(0)
         self.target.seek(0)
 
-    def next(self):
+    def __next__(self):
         if self.end_of_data:
             self.end_of_data = False
             self.reset()
@@ -59,7 +65,8 @@ class WordPairIterator:
         target = []
 
         # fill buffer, if it's empty
-        assert len(self.source_buffer) == len(self.target_buffer), 'Buffer size mismatch!'
+        assert len(self.source_buffer) == len(
+            self.target_buffer), 'Buffer size mismatch!'
 
         if len(self.source_buffer) == 0:
             for k_ in xrange(self.k):
@@ -129,13 +136,18 @@ class WordPairIterator:
 
         return source, target
 
-class WordCharPairIterator:
+
+class WordCharPairIterator(six.Iterator):
     """
         Iterator over source words and target characters
 
     """
-    def __init__(self, source, target,
-                 source_dict, target_dict,
+
+    def __init__(self,
+                 source,
+                 target,
+                 source_dict,
+                 target_dict,
                  batch_size=128,
                  maxlen=100,
                  n_words_source=-1,
@@ -143,9 +155,9 @@ class WordCharPairIterator:
         self.source = fopen(source, 'r')
         self.target = fopen(target, 'r')
         with open(source_dict, 'rb') as f:
-            self.source_dict = pkl.load(f)
+            self.source_dict = pkl.load(f, encoding='latin')
         with open(target_dict, 'rb') as f:
-            self.target_dict = pkl.load(f)
+            self.target_dict = pkl.load(f, encoding='latin')
 
         self.batch_size = batch_size
         self.maxlen = maxlen
@@ -173,7 +185,7 @@ class WordCharPairIterator:
         self.source.seek(0)
         self.target.seek(0)
 
-    def next(self):
+    def __next__(self):
         if self.end_of_data:
             self.end_of_data = False
             self.reset()
@@ -183,7 +195,8 @@ class WordCharPairIterator:
         target = []
 
         # fill buffer, if it's empty
-        assert len(self.source_buffer) == len(self.target_buffer), 'Buffer size mismatch!'
+        assert len(self.source_buffer) == len(
+            self.target_buffer), 'Buffer size mismatch!'
 
         if len(self.source_buffer) == 0:
             for k_ in xrange(self.k):
@@ -222,17 +235,19 @@ class WordCharPairIterator:
                     ss = self.source_buffer.pop()
                 except IndexError:
                     break
-                ss = [self.source_dict[w] if w in self.source_dict else self.SRC_UNK
-                      for w in ss]
+                ss = [self.source_dict[w] if w in self.source_dict else
+                      self.SRC_UNK for w in ss]
                 if self.n_words_source > 0:
-                    ss = [w if w < self.n_words_source else self.SRC_UNK for w in ss]
+                    ss = [w if w < self.n_words_source else self.SRC_UNK
+                          for w in ss]
 
                 # read from target file and map to target index
                 tt = self.target_buffer.pop()
-                tt = [self.target_dict[c] if c in self.target_dict else self.TRG_UNK
-                      for c in tt]
+                tt = [self.target_dict[c] if c in self.target_dict else
+                      self.TRG_UNK for c in tt]
                 if self.n_words_target > 0:
-                    tt = [c if c < self.n_words_target else self.TRG_UNK for c in tt]
+                    tt = [c if c < self.n_words_target else self.TRG_UNK
+                          for c in tt]
 
                 if len(ss) > self.maxlen:
                     continue
