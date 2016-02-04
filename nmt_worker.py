@@ -142,7 +142,7 @@ def init_params(options):
                                               nin=options['dim_word_src'],
                                               dim=options['dim'])
     ctxdim = 2 * options['dim']
-
+   
     # init_state, init_cell
     params = get_layer('ff')[0](options, params, prefix='ff_state',
                                 nin=ctxdim, nout=options['dim'])
@@ -167,6 +167,80 @@ def init_params(options):
                                 nout=options['n_words'])
 
     return params
+
+def init_params(options):
+    params = OrderedDict()
+
+    # embedding
+    params['Wemb'] = norm_weight(options['n_words_src'],
+                                 options['dim_word_src'])
+    params['Wemb_dec'] = norm_weight(options['n_words'],
+                                     options['dim_word_trg'])
+
+
+    # MLP for unknown words embedding! Takes 
+    # and outputs embedding for unknown words!
+    params = get_layer('ff')[0](options, 
+                                params,
+                                prefix='ff_embedding',
+                                nin=options['ctx_len_emb'] * options['dim_word_src'],
+                                nout=options['dim_word_src'])
+
+    # encoder: bidirectional RNN
+    params = get_layer(options['encoder'])[0](options,
+                                              params,
+                                              prefix='encoder',
+                                              nin=options['dim_word_src'],
+                                              dim=options['dim'])
+    params = get_layer(options['encoder'])[0](options,
+                                              params,
+                                              prefix='encoder_r',
+                                              nin=options['dim_word_src'],
+                                              dim=options['dim'])
+    ctxdim = 2 * options['dim']
+
+    # init_state, init_cell
+    params = get_layer('ff')[0](options,
+                                params,
+                                prefix='ff_state',
+                                nin=ctxdim,
+                                nout=options['dim'])
+    # decoder
+    params = get_layer(options['decoder'])[0](options,
+                                              params,
+                                              prefix='decoder',
+                                              nin=options['dim_word_trg'],
+                                              dim=options['dim'],
+                                              dimctx=ctxdim)
+    # readout
+    params = get_layer('ff')[0](options,
+                                params,
+                                prefix='ff_logit_lstm',
+                                nin=options['dim'],
+                                nout=options['dim_word_trg'],
+                                ortho=False)
+    params = get_layer('ff')[0](options,
+                                params,
+                                prefix='ff_logit_prev',
+                                nin=options['dim_word_trg'],
+                                nout=options['dim_word_trg'],
+                                ortho=False)
+    params = get_layer('ff')[0](options,
+                                params,
+                                prefix='ff_logit_ctx',
+                                nin=ctxdim,
+                                nout=options['dim_word_trg'],
+                                ortho=False)
+    params = get_layer('ff')[0](options,
+                                params,
+                                prefix='ff_logit',
+                                nin=options['dim_word_trg'],
+                                nout=options['n_words'])
+
+    return params
+
+
+
 
 
 def build_model(tparams, options):
@@ -799,10 +873,6 @@ def train(dim_word=100,
     else:
         params = unzip(tparams)
 	
-    pkl.dump(model_options, open('%s.pkl' % saveto, 'wb'))
-    print 'Done\n'
-
-
     use_noise.set_value(0.)
 
     if saveto:
@@ -849,8 +919,8 @@ if __name__ == '__main__':
         'mode' : [mode],
         'basedir' : ['/data/lisatmp3/nmt/data'],
         'model': ['%s/models/model_attention.npz'%basedir],
-        'dim_word': [100],
-        'dim': [100],
+        'dim_word': [150],
+        'dim': [124],
         'n-words': [3000],
         'optimizer': ['adadelta'],
         'decay-c': [0.],
