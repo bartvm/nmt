@@ -1,10 +1,10 @@
 import theano
-import theano.tensor as T
+from theano import tensor
 
 import numpy as np
 
 import six
-from utils import *
+from utils import itemlist
 import settings
 
 profile = settings.profile
@@ -31,14 +31,14 @@ def adam(lr, tparams, grads, inp, cost):
     i_t = i + 1.
     fix1 = 1. - b1**(i_t)
     fix2 = 1. - b2**(i_t)
-    lr_t = lr0 * (T.sqrt(fix2) / fix1)
+    lr_t = lr0 * (tensor.sqrt(fix2) / fix1)
 
     for p, g in zip(tparams.values(), gshared):
         m = theano.shared(p.get_value() * 0.)
         v = theano.shared(p.get_value() * 0.)
         m_t = (b1 * g) + ((1. - b1) * m)
-        v_t = (b2 * T.sqr(g)) + ((1. - b2) * v)
-        g_t = m_t / (T.sqrt(v_t) + e)
+        v_t = (b2 * tensor.sqr(g)) + ((1. - b2) * v)
+        g_t = m_t / (tensor.sqrt(v_t) + e)
         p_t = p - (lr_t * g_t)
         updates.append((m, m_t))
         updates.append((v, v_t))
@@ -74,7 +74,7 @@ def adadelta(lr, tparams, grads, inp, cost):
                                     updates=zgup + rg2up,
                                     profile=profile)
 
-    updir = [-T.sqrt(ru2 + 1e-6) / T.sqrt(rg2 + 1e-6) * zg
+    updir = [-tensor.sqrt(ru2 + 1e-6) / tensor.sqrt(rg2 + 1e-6) * zg
              for zg, ru2, rg2 in zip(zipped_grads, running_up2, running_grads2)
              ]
     ru2up = [(ru2, 0.95 * ru2 + 0.05 * (ud**2))
@@ -114,7 +114,7 @@ def rmsprop(lr, tparams, grads, inp, cost):
     updir = [theano.shared(p.get_value() * np.float32(0.),
                            name='%s_updir' % k)
              for k, p in six.iteritems(tparams)]
-    updir_new = [(ud, 0.9 * ud - 1e-4 * zg / T.sqrt(rg2 - rg**2 + 1e-4))
+    updir_new = [(ud, 0.9 * ud - 1e-4 * zg / tensor.sqrt(rg2 - rg**2 + 1e-4))
                  for ud, zg, rg, rg2 in zip(updir, zipped_grads, running_grads,
                                             running_grads2)]
     param_up = [(p, p + udn[1]) for p, udn in zip(
