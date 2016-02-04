@@ -7,6 +7,10 @@ import theano.tensor as tensor
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 from theano import config
 
+import six
+from six.moves import cPickle as pkl
+from six.moves import xrange
+
 import cPickle as pkl
 import ipdb
 import numpy
@@ -34,49 +38,7 @@ from layers import *
 import settings
 profile = settings.profile
 
-# batch preparation
-def prepare_data(seqs_x, seqs_y, ctx_len_emb, maxlen=None):
-    lengths_x = [len(s) for s in seqs_x]
-    lengths_y = [len(s) for s in seqs_y]
-        
-    if maxlen is not None:
-        new_seqs_x = []
-        new_seqs_y = []
-        new_lengths_x = []
-        new_lengths_y = []
-        for l_x, s_x, l_y, s_y in zip(lengths_x, seqs_x, lengths_y, seqs_y):
-            if l_x < maxlen and l_y < maxlen:
-                new_seqs_x.append(s_x)
-                new_lengths_x.append(l_x)
-                new_seqs_y.append(s_y)
-                new_lengths_y.append(l_y)
-        lengths_x = new_lengths_x
-        seqs_x = new_seqs_x
-        lengths_y = new_lengths_y
-        seqs_y = new_seqs_y
-	
-        if len(lengths_x) < 1 or len(lengths_y) < 1:
-            return None, None, None, None, None
-
-    n_samples = len(seqs_x)
-    maxlen_x = numpy.max(lengths_x) + 1
-    maxlen_y = numpy.max(lengths_y) + 1
-
-    x = numpy.zeros((maxlen_x, n_samples)).astype('int64')
-    y = numpy.zeros((maxlen_y, n_samples)).astype('int64')
-    x_mask = numpy.zeros((maxlen_x, n_samples)).astype('float32')
-    y_mask = numpy.zeros((maxlen_y, n_samples)).astype('float32')
-    
-    for idx, [s_x, s_y] in enumerate(zip(seqs_x, seqs_y)):
-        x[:lengths_x[idx], idx] = s_x
-        x_mask[:lengths_x[idx]+1, idx] = 1.
-        y[:lengths_y[idx], idx] = s_y
-        y_mask[:lengths_y[idx]+1, idx] = 1.
-    
-    unk_ctx = get_ctx_matrix(x, ctx_len_emb)
-    return x, x_mask, y, y_mask, unk_ctx
-
-def prepare_data2(seqs_x, seqs_y, maxlen=None):
+def prepare_data(seqs_x, seqs_y, maxlen=None):
     lengths_x = [len(s) for s in seqs_x]
     lengths_y = [len(s) for s in seqs_y]
         
@@ -330,7 +292,7 @@ def build_model(tparams, options):
     cost = cost.reshape([y.shape[0], y.shape[1]])
     cost = (cost * y_mask).sum(0)
 
-    return trng, use_noise, x, x_mask, y, y_mask, opt_ret, cost
+    return trng, use_noise, x, x_mask, y, y_mask, opt_ret, cost, unk_ctx
 
 # build a sampler
 def build_sampler(tparams, options, trng):
@@ -386,10 +348,10 @@ def build_sampler(tparams, options, trng):
                                     prefix='ff_state',
                                     activ='tanh')
 
-    print('Building f_init...', end=' ')
+    print 'Building f_init...'
     outs = [init_state, ctx]
-    f_init = theano.function([x], outs, name='f_init', profile=profile)
-    print('Done')
+    f_init = theano.function([x, unk_ctx], outs, name='f_init', profile=profile)
+    print 'Done'
 
     # x: 1 x 1
     y = tensor.vector('y_sampler', dtype='int64')
@@ -445,11 +407,11 @@ def build_sampler(tparams, options, trng):
 
     # compile a function to do the whole thing above, next word probability,
     # sampled word for the next target, next hidden state to be used
-    print('Building f_next..', end=' ')
+    print 'Building f_next..' 
     inps = [y, ctx, init_state]
     outs = [next_probs, next_sample, next_state]
     f_next = theano.function(inps, outs, name='f_next', profile=profile)
-    print('Done')
+    print 'Done'
 
     return f_init, f_next
 
@@ -477,11 +439,19 @@ def get_minibatches_idx(n, minibatch_size, shuffle=False):
 
     return zip(range(len(minibatches)), minibatches)
 
-
 # generate sample, either with stochastic sampling or beam search. Note that,
 # this function iteratively calls f_init and f_next functions.
-def gen_sample(tparams, f_init, f_next, x, options, trng=None, k=1, maxlen=30,
-               stochastic=True, argmax=False):
+def gen_sample(tparams,
+               ctx_len_emb=5,
+               f_init,
+               f_next,
+               x,
+               options,
+               trng=None,
+               k=1,
+               maxlen=30,
+               stochastic=True,
+               argmax=False):
 
     # k is the beam size we have
     if k > 1:
@@ -501,9 +471,10 @@ def gen_sample(tparams, f_init, f_next, x, options, trng=None, k=1, maxlen=30,
     hyp_states = []
 
     # get initial state of decoder rnn and encoder context
-    ret = f_init(x)
+    unk_ctx = get_ctx_matrix(x, ctx_len_emb)
+    ret = f_init(x, unk_ctx)
     next_state, ctx0 = ret[0], ret[1]
-    next_w = -1 * numpy.ones((1,)).astype('int64')  # bos indicator
+    next_w = -1 * numpy.ones((1, )).astype('int64')  # bos indicator
 
     for ii in xrange(maxlen):
         ctx = numpy.tile(ctx0, [live_k, 1])
@@ -523,7 +494,7 @@ def gen_sample(tparams, f_init, f_next, x, options, trng=None, k=1, maxlen=30,
         else:
             cand_scores = hyp_scores[:, None] - numpy.log(next_p)
             cand_flat = cand_scores.flatten()
-            ranks_flat = cand_flat.argsort()[:(k-dead_k)]
+            ranks_flat = cand_flat.argsort()[:(k - dead_k)]
 
             voc_size = next_p.shape[1]
             trans_indices = ranks_flat / voc_size
@@ -531,11 +502,11 @@ def gen_sample(tparams, f_init, f_next, x, options, trng=None, k=1, maxlen=30,
             costs = cand_flat[ranks_flat]
 
             new_hyp_samples = []
-            new_hyp_scores = numpy.zeros(k-dead_k).astype('float32')
+            new_hyp_scores = numpy.zeros(k - dead_k).astype('float32')
             new_hyp_states = []
 
             for idx, [ti, wi] in enumerate(zip(trans_indices, word_indices)):
-                new_hyp_samples.append(hyp_samples[ti]+[wi])
+                new_hyp_samples.append(hyp_samples[ti] + [wi])
                 new_hyp_scores[idx] = copy.copy(costs[idx])
                 new_hyp_states.append(copy.copy(next_state[ti]))
 
@@ -576,17 +547,16 @@ def gen_sample(tparams, f_init, f_next, x, options, trng=None, k=1, maxlen=30,
     return sample, sample_score
 
 
+
 # calculate the log probablities on a given corpus using translation model
 def pred_probs(f_log_probs, prepare_data, ctx_len_emb ,options, iterator, verbose=True):
     probs = []
-
     n_done = 0
 
     for x, y in iterator:
         n_done += len(x)
-        x, x_mask, y, y_mask, unk_ctx = prepare_data(x, y, ctx_len_emb)
-
-
+        x, x_mask, y, y_mask = prepare_data(x, y)
+        unk_ctx = get_ctx_matrix(x, ctx_len_emb)
         pprobs = f_log_probs(x, x_mask, y, y_mask, unk_ctx)
         for pp in pprobs:
             probs.append(pp)
@@ -595,7 +565,7 @@ def pred_probs(f_log_probs, prepare_data, ctx_len_emb ,options, iterator, verbos
             ipdb.set_trace()
 
         if verbose:
-            print >>sys.stderr, '%d samples computed' % (n_done)
+            print >> sys.stderr, '%d samples computed' % (n_done)
 
     return numpy.array(probs)
 
@@ -623,8 +593,7 @@ def get_minibatches_idx(n, minibatch_size, shuffle=False):
     return zip(range(len(minibatches)), minibatches)
 
 
-def train(dim_word=100,
-          dim_word_src=100,  # source word vector dimensionality
+def train(dim_word_src=100,  # source word vector dimensionality
           dim_word_trg=100,  # target word vector dimensionality
           dim=1000,  # the number of LSTM units
           encoder='gru',
@@ -685,16 +654,22 @@ def train(dim_word=100,
             models_options = pkl.load(f)
 
     print 'Loading data'
-    train = TextIterator(datasets[0], datasets[1],
-                         dictionaries[0], dictionaries[1],
-                         n_words_source=n_words_src, n_words_target=n_words,
-                         batch_size=batch_size,
-                         maxlen=maxlen)
-    valid = TextIterator(valid_datasets[0], valid_datasets[1],
-                         dictionaries[0], dictionaries[1],
-                         n_words_source=n_words_src, n_words_target=n_words,
-                         batch_size=valid_batch_size,
-                         maxlen=maxlen)
+    train = TextIterator(datasets[0],
+                             datasets[1],
+                             dictionaries[0],
+                             dictionaries[1],
+                             n_words_source=n_words_src,
+                             n_words_target=n_words,
+                             batch_size=batch_size,
+                             maxlen=maxlen)
+    valid = TextIterator(valid_datasets[0],
+                             valid_datasets[1],
+                             dictionaries[0],
+                             dictionaries[1],
+                             n_words_source=n_words_src,
+                             n_words_target=n_words,
+                             batch_size=valid_batch_size,
+                             maxlen=maxlen)
 
     print 'Building model'
     params = init_params(model_options)
@@ -770,14 +745,7 @@ def train(dim_word=100,
     print 'Done'
 
     print 'Optimization'
-    history_errs = []
-    # reload history
-    if reload_ and os.path.exists(saveto):
-        history_errs = list(numpy.load(saveto)['history_errs'])
     best_p = None
-    bad_counter = 0
-    bad_count = 0
-    uidx = 0
 
     if validFreq == -1:
         validFreq = len(train[0])/batch_size
@@ -787,7 +755,7 @@ def train(dim_word=100,
         sampleFreq = len(train[0])/batch_size
 
 
-
+    # Training data iterator!
     def train_iter():
         while True:
 	    try:
@@ -799,7 +767,7 @@ def train(dim_word=100,
             	for _, train_index in kf:
 			y = [y_data[t] for t in train_index]
 			x = [x_data[t] for t in train_index]
-                	x, x_mask, y, y_mask = prepare_data2(x, y, maxlen=maxlen)
+                	x, x_mask, y, y_mask = prepare_data(x, y, maxlen=maxlen)
                 	yield x, x_mask, y, y_mask
 	    except:
 			train.end_of_data = False
@@ -826,9 +794,13 @@ def train(dim_word=100,
 			if len(x) == 0:
                 		print 'No input is present ', x
                 		continue
-			
+		
+                        # For this particular, mini-batch, it 
+                        # outputs the context matrix for all the 
+                        # unknown words.	
                         unk_ctx = get_ctx_matrix(x, ctx_len_emb)
-			if unk_ctx is None:
+			
+                        if unk_ctx is None:
         			print 'No unknown word is present ', unk_ctx
                 		continue
 			if len(unk_ctx) == 0:
@@ -851,8 +823,11 @@ def train(dim_word=100,
             if valid_sync:
                 worker.copy_to_local()
             use_noise.set_value(0.)
-	    valid_errs = pred_probs(f_log_probs, prepare_data, ctx_len_emb,
-                                    model_options, valid)
+	    valid_errs = pred_probs(f_log_probs, 
+                                    prepare_data, 
+                                    ctx_len_emb,
+                                    model_options, 
+                                    valid)
 	    valid_err = valid_errs.mean()
             res = worker.send_req(dict(test_err=float(valid_err),
                                        valid_err=float(valid_err)))
@@ -892,7 +867,6 @@ def main(job_id, params):
     basedir = params['basedir'][0];
     valid_err = train(saveto=params['model'][0],
           reload_= params['reload'][0],
-          dim_word = params['dim_word'][0],
           dim = params['dim'][0],
           n_words = params['n-words'][0],
           n_words_src = params['n-words'][0],
@@ -924,7 +898,6 @@ if __name__ == '__main__':
         'mode' : [mode],
         'basedir' : ['/data/lisatmp3/nmt/data'],
         'model': ['%s/models/model_attention.npz'%basedir],
-        'dim_word': [150],
         'dim': [124],
         'n-words': [3000],
         'optimizer': ['adadelta'],
