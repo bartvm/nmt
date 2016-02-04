@@ -1,5 +1,5 @@
 import theano
-import theano.tensor as tensor
+from theano import tensor
 import warnings
 import six
 import pickle

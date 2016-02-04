@@ -3,11 +3,11 @@ Build a neural machine translation model with soft attention
 '''
 from __future__ import print_function
 import theano
-import theano.tensor as tensor
-from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+from theano import tensor
+from theano.sandbox.rng_mrg import MRG_RandomStreams
 
 import six
-from six.moves import cPickle as pkl
+from six.moves import cPickle
 from six.moves import xrange
 import ipdb
 import numpy
@@ -19,9 +19,10 @@ import time
 
 from collections import OrderedDict
 from data_iterator import get_stream, load_dict
-from utils import *
-from optimizers import *
-from layers import *
+import optimizers
+from utils import (dropout_layer, norm_weight, zipp, unzip,
+                   init_tparams, load_params, itemlist, concatenate)
+from layers import get_layer
 
 import settings
 profile = settings.profile
@@ -137,7 +138,7 @@ def init_params(options):
 def build_model(tparams, options):
     opt_ret = dict()
 
-    trng = RandomStreams(1234)
+    trng = MRG_RandomStreams(1234)
     use_noise = theano.shared(numpy.float32(0.))
 
     # description string: #words x #samples
@@ -536,7 +537,7 @@ def train(dim_word_src=100,  # source word vector dimensionality
     # reload options
     if reload_ and os.path.exists(saveto):
         with open('%s.pkl' % saveto, 'rb') as f:
-            models_options = pkl.load(f, encoding='latin')
+            models_options = cPickle.load(f, encoding='latin')
 
     print('Loading data')
     train_stream = get_stream([datasets[0]],
@@ -619,7 +620,8 @@ def train(dim_word_src=100,  # source word vector dimensionality
     # compile the optimizer, the actual computational graph is compiled here
     lr = tensor.scalar(name='lr')
     print('Building optimizers...', end=' ')
-    f_grad_shared, f_update = eval(optimizer)(lr, tparams, grads, inps, cost)
+    f_grad_shared, f_update = getattr(optimizers, optimizer)(lr, tparams,
+                                                             grads, inps, cost)
     print('Done')
 
     print('Optimization')
@@ -678,7 +680,7 @@ def train(dim_word_src=100,  # source word vector dimensionality
                 else:
                     params = unzip(tparams)
                 numpy.savez(saveto, history_errs=history_errs, **params)
-                pkl.dump(model_options, open('%s.pkl' % saveto, 'wb'))
+                cPickle.dump(model_options, open('%s.pkl' % saveto, 'wb'))
                 print('Done')
 
             # generate some samples with the model and display them
