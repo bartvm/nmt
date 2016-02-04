@@ -18,7 +18,7 @@ import sys
 import time
 
 from collections import OrderedDict
-from data_iterator import WordPairIterator
+from data_iterator import get_stream, load_dict
 from utils import *
 from optimizers import *
 from layers import *
@@ -464,12 +464,12 @@ def gen_sample(tparams,
 
 
 # calculate the log probablities on a given corpus using translation model
-def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=True):
+def pred_probs(f_log_probs, prepare_data, options, stream, verbose=True):
     probs = []
 
     n_done = 0
 
-    for x, y in iterator:
+    for x, y in stream.get_epoch_iterator():
         n_done += len(x)
 
         x, x_mask, y, y_mask = prepare_data(x, y)
@@ -528,8 +528,7 @@ def train(dim_word_src=100,  # source word vector dimensionality
     worddicts = [None] * len(dictionaries)
     worddicts_r = [None] * len(dictionaries)
     for ii, dd in enumerate(dictionaries):
-        with open(dd, 'rb') as f:
-            worddicts[ii] = pkl.load(f, encoding='latin')
+        worddicts[ii] = load_dict(dd)
         worddicts_r[ii] = dict()
         for kk, vv in six.iteritems(worddicts[ii]):
             worddicts_r[ii][vv] = kk
@@ -540,22 +539,20 @@ def train(dim_word_src=100,  # source word vector dimensionality
             models_options = pkl.load(f, encoding='latin')
 
     print('Loading data')
-    train = WordPairIterator(datasets[0],
-                             datasets[1],
-                             dictionaries[0],
-                             dictionaries[1],
-                             n_words_source=n_words_src,
-                             n_words_target=n_words,
-                             batch_size=batch_size,
-                             maxlen=maxlen)
-    valid = WordPairIterator(valid_datasets[0],
-                             valid_datasets[1],
-                             dictionaries[0],
-                             dictionaries[1],
-                             n_words_source=n_words_src,
-                             n_words_target=n_words,
-                             batch_size=valid_batch_size,
-                             maxlen=maxlen)
+    train_stream = get_stream([datasets[0]],
+                              [datasets[1]],
+                              dictionaries[0],
+                              dictionaries[1],
+                              n_words_source=n_words_src,
+                              n_words_target=n_words,
+                              batch_size=batch_size)
+    valid_stream = get_stream([valid_datasets[0]],
+                              [valid_datasets[1]],
+                              dictionaries[0],
+                              dictionaries[1],
+                              n_words_source=n_words_src,
+                              n_words_target=n_words,
+                              batch_size=valid_batch_size)
 
     print('Building model')
     params = init_params(model_options)
@@ -634,19 +631,12 @@ def train(dim_word_src=100,  # source word vector dimensionality
     best_p = None
     bad_counter = 0
 
-    if validFreq == -1:
-        validFreq = len(train[0]) / batch_size
-    if saveFreq == -1:
-        saveFreq = len(train[0]) / batch_size
-    if sampleFreq == -1:
-        sampleFreq = len(train[0]) / batch_size
-
     uidx = 0
     estop = False
     for eidx in xrange(max_epochs):
         n_samples = 0
 
-        for x, y in train:
+        for x, y in train_stream.get_epoch_iterator():
             n_samples += len(x)
             uidx += 1
             use_noise.set_value(1.)

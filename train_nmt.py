@@ -21,16 +21,20 @@ def main(job_id, params):
         maxlen=50,
         batch_size=80,
         valid_batch_size=80,
-        datasets=['/home/%s/data/mt/europarl-v7.fr-en.en.tok' % os.environ[
-            'USER'], '/home/%s/data/mt/europarl-v7.fr-en.fr.tok' % os.environ[
-                'USER']],
-        valid_datasets=['/home/%s/data/mt/newstest2011.en.tok' % os.environ[
-            'USER'], '/home/%s/data/mt/newstest2011.fr.tok' % os.environ[
-                'USER']],
+        datasets=[
+            ('/home/%s/data/mt/'
+             'wmt16.de-en.tok.true.clean.shuf.en' % os.environ['USER']),
+            ('/home/%s/data/mt/'
+             'wmt16.de-en.tok.true.clean.shuf.de' % os.environ['USER'])
+        ],
+        valid_datasets=[
+            '/home/%s/data/mt/newstest2011.en.tok' % os.environ['USER'],
+            '/home/%s/data/mt/newstest2011.fr.tok' % os.environ['USER']
+        ],
         dictionaries=[('/home/%s/data/mt/'
-                       'europarl-v7.fr-en.en.tok.pkl' % os.environ['USER']),
+                       'wmt16.de-en.vocab.en' % os.environ['USER']),
                       ('/home/%s/data/mt/'
-                       'europarl-v7.fr-en.fr.tok.pkl' % os.environ['USER'])],
+                       'wmt16.de-en.vocab.de' % os.environ['USER'])],
         validFreq=5000,
         dispFreq=500,
         saveFreq=5000,
