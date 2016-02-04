@@ -1,6 +1,7 @@
-import theano.tensor as T
+import theano
+from theano import tensor
 import numpy
-from utils import *
+from utils import uniform_weight, ortho_weight
 
 import settings
 profile = settings.profile
@@ -39,20 +40,20 @@ def _gru(m_, x_, xx_, h_, U, Ux, bg=None, bi=None):
 
     dim = U.shape[0]
 
-    preact = x_ + T.dot(h_, U)
+    preact = x_ + tensor.dot(h_, U)
     if not (bg is None):
         preact += bg
 
     # reset and update gates
-    r = T.nnet.sigmoid(_slice(preact, 0, dim))
-    u = T.nnet.sigmoid(_slice(preact, 1, dim))
+    r = tensor.nnet.sigmoid(_slice(preact, 0, dim))
+    u = tensor.nnet.sigmoid(_slice(preact, 1, dim))
 
     # compute the hidden state proposal
-    preact2 = xx_ + r * T.dot(h_, Ux)
+    preact2 = xx_ + r * tensor.dot(h_, Ux)
     if not (bi is None):
         preact2 += bi
 
-    h = T.tanh(preact2)
+    h = tensor.tanh(preact2)
 
     # leaky integrate and obtain next hidden state
     h = u * h_ + (1. - u) * h
@@ -79,10 +80,10 @@ def fflayer(tparams,
             state_below,
             options,
             prefix='rconv',
-            activ='lambda x: T.tanh(x)',
+            activ='lambda x: tensor.tanh(x)',
             **kwargs):
-    return eval(activ)(T.dot(state_below, tparams[prefix + '_W']) + tparams[
-        prefix + '_b'])
+    return eval(activ)(tensor.dot(state_below, tparams[prefix + '_W']) +
+                       tparams[prefix + '_b'])
 
 
 # GRU layer
@@ -124,21 +125,21 @@ def gru_layer(tparams,
     dim = tparams[prefix + '_Ux'].shape[1]
 
     if mask is None:
-        mask = T.alloc(1., state_below.shape[0], 1)
+        mask = tensor.alloc(1., state_below.shape[0], 1)
 
     # state_below is the input word embeddings
-    state_below_ = T.dot(state_below,
-                         tparams[prefix + '_W']) + tparams[prefix + '_b']
-    state_belowx = T.dot(state_below,
-                         tparams[prefix + '_Wx']) + tparams[prefix + '_bx']
+    state_below_ = (tensor.dot(state_below, tparams[prefix + '_W']) +
+                    tparams[prefix + '_b'])
+    state_belowx = (tensor.dot(state_below, tparams[prefix + '_Wx']) +
+                    tparams[prefix + '_bx'])
 
     # prepare scan arguments
     seqs = [mask, state_below_, state_belowx]
 
     if state_below.ndim == 4:
-        init_states = [T.alloc(0., state_below.shape[1], n_samples, dim)]
+        init_states = [tensor.alloc(0., state_below.shape[1], n_samples, dim)]
     else:
-        init_states = [T.alloc(0., n_samples, dim)]
+        init_states = [tensor.alloc(0., n_samples, dim)]
 
     _step = _gru
     shared_vars = [tparams[prefix + '_U'], tparams[prefix + '_Ux']]
@@ -228,28 +229,29 @@ def gru_cond_layer(tparams,
 
     # mask
     if mask is None:
-        mask = T.alloc(1., state_below.shape[0], 1)
+        mask = tensor.alloc(1., state_below.shape[0], 1)
 
     dim = tparams[prefix + '_Wcx'].shape[1]
 
     # initial/previous state
     if init_state is None:
         if state_below.ndim == 4:
-            init_state = [T.alloc(0., state_below.shape[1], n_samples, dim)]
+            init_state = [tensor.alloc(0., state_below.shape[1],
+                                       n_samples, dim)]
         else:
-            init_state = [T.alloc(0., n_samples, dim)]
+            init_state = [tensor.alloc(0., n_samples, dim)]
 
     # projected context
     assert context.ndim == 3, \
         'Context must be 3-d: #annotation x #sample x dim'
-    pctx_ = T.dot(context,
-                  tparams[prefix + '_Wc_att']) + tparams[prefix + '_b_att']
+    pctx_ = (tensor.dot(context, tparams[prefix + '_Wc_att']) +
+             tparams[prefix + '_b_att'])
 
     # projected x
-    state_belowx = T.dot(state_below,
-                         tparams[prefix + '_Wx']) + tparams[prefix + '_bx']
-    state_below_ = T.dot(state_below,
-                         tparams[prefix + '_W']) + tparams[prefix + '_b']
+    state_belowx = (tensor.dot(state_below, tparams[prefix + '_Wx']) +
+                    tparams[prefix + '_bx'])
+    state_below_ = (tensor.dot(state_below, tparams[prefix + '_W']) +
+                    tparams[prefix + '_b'])
 
     def _step_slice(m_, x_, xx_, h_, ctx_, alpha_, pctx_, cc_, U, Wc,
                     W_comb_att, U_att, c_att, Ux, Wcx, U_nl, Ux_nl, b_nl,
@@ -258,20 +260,20 @@ def gru_cond_layer(tparams,
         h1 = _gru(m_, x_, xx_, h_, U, Ux)
 
         # attention
-        pstate_ = T.dot(h1, W_comb_att)
+        pstate_ = tensor.dot(h1, W_comb_att)
         pctx__ = pctx_ + pstate_[None, :, :]
         # pctx__ += xc_
-        pctx__ = T.tanh(pctx__)
-        alpha = T.dot(pctx__, U_att) + c_att
+        pctx__ = tensor.tanh(pctx__)
+        alpha = tensor.dot(pctx__, U_att) + c_att
         alpha = alpha.reshape([alpha.shape[0], alpha.shape[1]])
-        alpha = T.exp(alpha)
+        alpha = tensor.exp(alpha)
         if context_mask:
             alpha = alpha * context_mask
         alpha = alpha / alpha.sum(0, keepdims=True)
         ctx_ = (cc_ * alpha[:, :, None]).sum(0)  # current context
 
-        new_x_ = T.dot(ctx_, Wc)
-        new_xx_ = T.dot(ctx_, Wcx)
+        new_x_ = tensor.dot(ctx_, Wc)
+        new_xx_ = tensor.dot(ctx_, Wcx)
 
         h2 = _gru(m_, new_x_, new_xx_, h1, U_nl, Ux_nl, bg=b_nl, bi=bx_nl)
 
@@ -294,8 +296,11 @@ def gru_cond_layer(tparams,
         rval, updates = theano.scan(
             _step,
             sequences=seqs,
-            outputs_info=[init_state, T.alloc(0., n_samples, context.shape[2]),
-                          T.alloc(0., n_samples, context.shape[0])],
+            outputs_info=[
+                init_state,
+                tensor.alloc(0., n_samples, context.shape[2]),
+                tensor.alloc(0., n_samples, context.shape[0])
+            ],
             non_sequences=[pctx_, context] + shared_vars,
             name=prefix + '_layers',
             n_steps=nsteps,
