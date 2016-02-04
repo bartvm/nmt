@@ -332,7 +332,7 @@ def build_model(tparams, options):
 
     return trng, use_noise, x, x_mask, y, y_mask, opt_ret, cost
 
-
+# build a sampler
 def build_sampler(tparams, options, trng):
     x = tensor.matrix('x', dtype='int64')
     unk_ctx = tensor.matrix('unk_ctx', dtype='int64') 
@@ -343,85 +343,116 @@ def build_sampler(tparams, options, trng):
     n_ctx = unk_ctx.shape[0] 
 
     unk_ctx_wrd_emb = tparams['Wemb'][unk_ctx.flatten()]
-    unk_ctx_wrd_emb = unk_ctx_wrd_emb.reshape([n_ctx, options['ctx_len_emb']*options['dim_word_src']])
-
-    #if unk_ctx_emb is None::TODO    
-    unk_ctx_emb = get_layer('ff')[1](tparams, unk_ctx_wrd_emb, options,
+    unk_ctx_wrd_emb = unk_ctx_wrd_emb.reshape([n_ctx, 
+                                               options['ctx_len_emb']*options['dim_word_src']])
+    unk_ctx_emb = get_layer('ff')[1](tparams, 
+                                     unk_ctx_wrd_emb, 
+                                     options,
 				     prefix='ff_embedding',
 			             activ='tanh')
 	
-   # word embedding (source), forward and backward
+    # word embedding (source), forward and backward
     x_temp = x.flatten();    
     ones_vec = T.switch(T.eq(x_temp, 1), 1, 0)
     cum_sum = T.extra_ops.cumsum(ones_vec)
-    final = T.switch(T.eq(x_temp, 1), cum_sum + options['n_words_src'] - 1, x_temp)
-    
-    c_word_embedding = concatenate([tparams['Wemb'], unk_ctx_emb], axis=0)
-    emb = c_word_embedding[final[:]];      
+    cmb_x_vector = T.switch(T.eq(x_temp, 1), cum_sum + options['n_words_src'] - 1,  x_temp)
+    c_word_embedding = concatenate([tparams['Wemb'], unk_ctx_emb], axis=0) 
+    emb = c_word_embedding[cmb_x_vector[:]];
     emb = emb.reshape([n_timesteps, n_samples, options['dim_word_src']])
     
-
-    finalr = final[::-1]
-    embr = c_word_embedding[finalr[:]];
-
-#    embr = tparams['Wemb'][xr.flatten()]   
+    cmb_x_vectorr = cmb_x_vector[::-1]
+    embr = c_word_embedding[cmb_x_vectorr[:]];
     embr = embr.reshape([n_timesteps, n_samples, options['dim_word_src']])
-    
+
     # encoder
-    proj = get_layer(options['encoder'])[1](tparams, emb, options,
+    proj = get_layer(options['encoder'])[1](tparams,
+                                            emb,
+                                            options,
                                             prefix='encoder')
-    projr = get_layer(options['encoder'])[1](tparams, embr, options,
+    projr = get_layer(options['encoder'])[1](tparams,
+                                             embr,
+                                             options,
                                              prefix='encoder_r')
+
     # concatenate forward and backward rnn hidden states
-    ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim-1)
+    ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim - 1)
+
     # get the input for decoder rnn initializer mlp
     ctx_mean = ctx.mean(0)
     # ctx_mean = concatenate([proj[0][-1],projr[0][-1]], axis=proj[0].ndim-2)
-    init_state = get_layer('ff')[1](tparams, ctx_mean, options,
-                                    prefix='ff_state', activ='tanh')
-    print 'Building f_init...',
+    init_state = get_layer('ff')[1](tparams,
+                                    ctx_mean,
+                                    options,
+                                    prefix='ff_state',
+                                    activ='tanh')
+
+    print('Building f_init...', end=' ')
     outs = [init_state, ctx]
-    f_init = theano.function([x, unk_ctx], outs, name='f_init', profile=profile)
-    print 'Done'
+    f_init = theano.function([x], outs, name='f_init', profile=profile)
+    print('Done')
+
     # x: 1 x 1
     y = tensor.vector('y_sampler', dtype='int64')
     init_state = tensor.matrix('init_state', dtype='float32')
+
     # if it's the first word, emb should be all zero and it is indicated by -1
     emb = tensor.switch(y[:, None] < 0,
                         tensor.alloc(0., 1, tparams['Wemb_dec'].shape[1]),
                         tparams['Wemb_dec'][y])
+
     # apply one step of conditional gru with attention
-    proj = get_layer(options['decoder'])[1](tparams, emb, options,
-				    prefix='decoder',
-                                            mask=None, context=ctx,
+    proj = get_layer(options['decoder'])[1](tparams,
+                                            emb,
+                                            options,
+                                            prefix='decoder',
+                                            mask=None,
+                                            context=ctx,
                                             one_step=True,
-                                           init_state=init_state)
+                                            init_state=init_state)
     # get the next hidden state
     next_state = proj[0]
+
     # get the weighted averages of context for this target word y
     ctxs = proj[1]
-    logit_lstm = get_layer('ff')[1](tparams, next_state, options,
-                                    prefix='ff_logit_lstm', activ='linear')
-    logit_prev = get_layer('ff')[1](tparams, emb, options,
-                                    prefix='ff_logit_prev', activ='linear')
-    logit_ctx = get_layer('ff')[1](tparams, ctxs, options,
-                                   prefix='ff_logit_ctx', activ='linear')
-    logit = tensor.tanh(logit_lstm+logit_prev+logit_ctx)
-    logit = get_layer('ff')[1](tparams, logit, options,
-                               prefix='ff_logit', activ='linear')
+
+    logit_lstm = get_layer('ff')[1](tparams,
+                                    next_state,
+                                    options,
+                                    prefix='ff_logit_lstm',
+                                    activ='linear')
+    logit_prev = get_layer('ff')[1](tparams,
+                                    emb,
+                                    options,
+                                    prefix='ff_logit_prev',
+                                    activ='linear')
+    logit_ctx = get_layer('ff')[1](tparams,
+                                   ctxs,
+                                   options,
+                                   prefix='ff_logit_ctx',
+                                   activ='linear')
+    logit = tensor.tanh(logit_lstm + logit_prev + logit_ctx)
+    logit = get_layer('ff')[1](tparams,
+                               logit,
+                               options,
+                               prefix='ff_logit',
+                               activ='linear')
+
     # compute the softmax probability
     next_probs = tensor.nnet.softmax(logit)
+
     # sample from softmax distribution to get the sample
     next_sample = trng.multinomial(pvals=next_probs).argmax(1)
+
     # compile a function to do the whole thing above, next word probability,
     # sampled word for the next target, next hidden state to be used
-    print 'Building f_next..',
+    print('Building f_next..', end=' ')
     inps = [y, ctx, init_state]
     outs = [next_probs, next_sample, next_state]
     f_next = theano.function(inps, outs, name='f_next', profile=profile)
-    print 'Done'
-   
+    print('Done')
+
     return f_init, f_next
+
     
 def get_minibatches_idx(n, minibatch_size, shuffle=False):
     """
