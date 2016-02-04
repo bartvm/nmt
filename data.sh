@@ -50,10 +50,14 @@ function shuffle {
   rm rand
 }
 
+# Pipe vocabularies to cut -f 2 to just get words
+
 function create-vocabulary {
-  # Pipe to cut -f 2 in order to just get words
   [ $# -lt 1 ] && { echo "Usage: $0 filename"; return 1; }
-  tr "[:blank:]" "\n" < $1 | \
-    sort -S 8G --compress-program=gzip --batch-size 128 --parallel=$(min $(nproc --all) 4) | \
-    uniq -c | sort -k 1nr | awk -v OFS='\t' '{print $1, $2}'
+  awk -v OFS="\t" '{ for(i=1; i<=NF; i++) w[$i]++ } END { for(i in w) print w[i], i }' $1 | sort -k 1nr
+}
+
+function create-char-vocabulary {
+  [ $# -lt 1 ] && { echo "Usage: $0 filename"; return 1; }
+  awk -v OFS="\t" -v FS="" '{ for(i=1; i<=NF; i++) w[$i]++ } END { for(i in w) print w[i], i }' $1 | sort -k 1nr
 }
