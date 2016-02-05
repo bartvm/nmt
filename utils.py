@@ -8,6 +8,71 @@ import numpy
 import inspect
 from collections import OrderedDict
 
+def contextwin(l, win):
+    '''
+    win :: int corresponding to the size of the window
+    given a list of indexes composing a sentence
+
+    l :: array containing the word indexes
+
+    it will return a list of list of indexes corresponding
+    to context windows surrounding each word in the sentence
+    '''
+    assert (win % 2) == 1
+    assert win >= 1
+    l = list(l)
+
+    lpadded = win // 2 * [0] + l + win // 2 * [0]
+    out = [lpadded[i:(i + win)] for i in range(len(l)) if l[i]==1]
+
+    #This condition not necessery, we worry only for UNKs
+    #assert len(out) == len(l)
+    return out
+
+def getmaskwin(l, mask_element):
+    '''
+    mask_element :: element which you want to check
+    l :: array containing the word indexes
+
+    or can also use, np.where(list == mask_element)
+    enumerate is probably efficient.
+
+    '''
+    assert (mask_element) == 1
+    assert len(l) >= 1
+    l = list(l)
+    masked_list = numpy.zeros(len(l))
+    indices = [i for i, x in enumerate(l) if x == mask_element]
+    masked_list[indices[:]] = mask_element;
+    assert len(masked_list) == len(l)
+    return masked_list
+
+def get_ctx_matrix(x_data, context_len):
+        x_temp = x_data.transpose()
+        unk_ctx = numpy.array([])
+        count = 0
+        for i in range(len(x_temp)):
+                outa  = contextwin(x_temp[i], context_len);
+                if outa:
+                        if count == 0:
+                                unk_ctx = outa;
+                        else:
+                                unk_ctx = numpy.append(unk_ctx, outa, axis = 0)
+                        count = count + 1;
+
+        return unk_ctx;
+
+
+def get_mask_matrix(x_data, mask_element):
+
+    x_data = x_data.transpose()
+    assert len(x_data) >= 1
+    mask_emb = [getmaskwin(x_data[i], mask_element) for i in range(len(x_data))];
+    mask_emb = numpy.vstack(mask_emb[:])
+    mask_emb = mask_emb.transpose()
+    return mask_emb
+
+
 
 # push parameters to Theano shared variables
 def zipp(params, tparams):
