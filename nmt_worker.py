@@ -1,3 +1,40 @@
+import theano
+from theano import tensor
+from theano.sandbox.rng_mrg import MRG_RandomStreams
+from theano import config
+
+import six
+from six.moves import cPickle
+from six.moves import xrange
+
+import cPickle as pkl
+import ipdb
+import numpy
+import copy
+
+import os
+import warnings
+import sys
+import argparse
+import time
+
+sys.path.append(os.path.dirname(__file__))
+sys.path.append(os.path.join(os.path.dirname(__file__), 'platoon'))
+
+from platoon.channel import Worker
+from platoon.param_sync import EASGD
+
+
+from collections import OrderedDict
+from data_iterator import get_stream, load_dict
+from utils import (dropout_layer, norm_weight, zipp, unzip, get_ctx_matrix,
+		  init_tparams, load_params, itemlist, concatenate)
+
+from  optimizers import adadelta, rmsprop, adam, sgd
+from layers import get_layer
+
+import settings
+profile = settings.profile
 from nmt_base import prepare_data, init_params, build_model, build_sampler, get_minibatches_idx, gen_sample, pred_probs
 def train(dim_word_src=100,  # source word vector dimensionality
           dim_word_trg=100,  # target word vector dimensionality
