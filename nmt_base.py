@@ -34,7 +34,7 @@ from data_iterator import get_stream, load_dict
 from utils import (dropout_layer, norm_weight, zipp, unzip, get_ctx_matrix,
 		  init_tparams, load_params, itemlist, concatenate)
 
-from  optimizers import *
+from  optimizers import adadelta, rmsprop, adam, sgd
 from layers import get_layer
 
 import settings
