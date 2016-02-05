@@ -1,7 +1,7 @@
 from __future__ import print_function
 import os
 
-from nmt import train
+from nmt_single import train
 
 
 def main(job_id, params):
