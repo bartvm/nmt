@@ -735,7 +735,7 @@ def train(dim_word_src=100,  # source word vector dimensionality
             if numpy.mod(uidx, validFreq) == 0:
                 use_noise.set_value(0.)
                 valid_errs = pred_probs(f_log_probs, prepare_data,
-                                        model_options, valid)
+                                        model_options, valid_stream)
                 valid_err = valid_errs.mean()
                 history_errs.append(valid_err)
 
@@ -771,7 +771,7 @@ def train(dim_word_src=100,  # source word vector dimensionality
 
     use_noise.set_value(0.)
     valid_err = pred_probs(f_log_probs, prepare_data, model_options,
-                           valid).mean()
+                           valid_stream).mean()
 
     print('Valid ', valid_err)
 
