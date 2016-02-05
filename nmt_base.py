@@ -5,36 +5,26 @@ Build a neural machine translation model with soft attention
 import theano
 from theano import tensor
 from theano.sandbox.rng_mrg import MRG_RandomStreams
-from theano import config
 
-import six
 from six.moves import cPickle
 from six.moves import xrange
 
-import cPickle as pkl
 import ipdb
 import numpy
 import copy
 
 import os
-import warnings
 import sys
-import argparse
-import time
 
 sys.path.append(os.path.dirname(__file__))
 sys.path.append(os.path.join(os.path.dirname(__file__), 'platoon'))
 
-from platoon.channel import Worker
-from platoon.param_sync import EASGD
 
 
 from collections import OrderedDict
-from data_iterator import get_stream, load_dict
-from utils import (dropout_layer, norm_weight, zipp, unzip, get_ctx_matrix,
-		  init_tparams, load_params, itemlist, concatenate)
+from utils import (dropout_layer, norm_weight, get_ctx_matrix,
+		   concatenate)
 
-from  optimizers import adadelta, rmsprop, adam, sgd
 from layers import get_layer
 
 import settings
@@ -43,7 +33,6 @@ profile = settings.profile
 def prepare_data(seqs_x, seqs_y, maxlen=None):
     lengths_x = [len(s) for s in seqs_x]
     lengths_y = [len(s) for s in seqs_y]
-        
     if maxlen is not None:
         new_seqs_x = []
         new_seqs_y = []
@@ -83,7 +72,6 @@ def prepare_data(seqs_x, seqs_y, maxlen=None):
 # initialize all parameters
 def init_params(options):
     params = OrderedDict()
-
     # embedding
     params['Wemb'] = norm_weight(options['n_words_src'],
                                  options['dim_word_src'])
