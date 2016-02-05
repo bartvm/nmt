@@ -1,4 +1,4 @@
-from nmt_base import *
+from nmt_base import prepare_data, init_params, build_model, build_sampler, get_minibatches_idx, gen_sample, pred_probs
 def train(dim_word_src=100,  # source word vector dimensionality
           dim_word_trg=100,  # target word vector dimensionality
           dim=1000,  # the number of LSTM units
