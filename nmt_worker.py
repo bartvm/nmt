@@ -249,7 +249,7 @@ def train(dim_word_src=100,  # source word vector dimensionality
                                     prepare_data, 
                                     ctx_len_emb,
                                     model_options, 
-                                    valid)
+                                    valid_stream)
 	    valid_err = valid_errs.mean()
             res = worker.send_req(dict(test_err=float(valid_err),
                                        valid_err=float(valid_err)))

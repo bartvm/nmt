@@ -9,7 +9,6 @@ import settings
 
 profile = settings.profile
 
-
 # optimizers
 # name(hyperp, tparams, grads, inputs (list), cost) = f_grad_shared, f_update
 def adam(lr, tparams, grads, inp, cost):

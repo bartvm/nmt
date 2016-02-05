@@ -18,16 +18,11 @@ import sys
 
 sys.path.append(os.path.dirname(__file__))
 sys.path.append(os.path.join(os.path.dirname(__file__), 'platoon'))
-
-
-
 from collections import OrderedDict
+import settings
+from layers import get_layer
 from utils import (dropout_layer, norm_weight, get_ctx_matrix,
 		   concatenate)
-
-from layers import get_layer
-
-import settings
 profile = settings.profile
 
 def prepare_data(seqs_x, seqs_y, maxlen=None):
