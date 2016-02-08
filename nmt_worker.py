@@ -44,7 +44,6 @@ def train(dim_word_src=100,  # source word vector dimensionality
           optimizer='rmsprop',
           batch_size=64,
           valid_batch_size=64,
-          ctx_len_emb=5,
           train_len=1,
           saveto='model.npz',
           validFreq=1000,
@@ -73,16 +72,15 @@ def train(dim_word_src=100,  # source word vector dimensionality
     worddicts = [None] * len(dictionaries)
     worddicts_r = [None] * len(dictionaries)
     for ii, dd in enumerate(dictionaries):
-        with open(dd, 'rb') as f:
-            worddicts[ii] = load_dict(dd)
+        worddicts[ii] = load_dict(dd)
         worddicts_r[ii] = dict()
-    for kk, vv in six.iteritems(worddicts[ii]):
-        worddicts_r[ii][vv] = kk
+        for kk, vv in six.iteritems(worddicts[ii]):
+            worddicts_r[ii][vv] = kk
 
     # reload options
     if reload_ and os.path.exists(saveto):
         with open('%s.pkl' % saveto, 'rb') as f:
-            models_options = cPickle.load(f)
+            models_options = cPickle.load(f, encoding='latin')
 
     print('Loading data')
     train_stream = get_stream([datasets[0]],
@@ -132,7 +130,7 @@ def train(dim_word_src=100,  # source word vector dimensionality
     if decay_c > 0.:
         decay_c = theano.shared(numpy.float32(decay_c), name='decay_c')
         weight_decay = 0.
-        for kk, vv in tparams.iteritems():
+        for kk, vv in six.iteritems(tparams):
             weight_decay += (vv ** 2).sum()
         weight_decay *= decay_c
         cost += weight_decay
@@ -140,9 +138,9 @@ def train(dim_word_src=100,  # source word vector dimensionality
     # regularize the alpha weights
     if alpha_c > 0. and not model_options['decoder'].endswith('simple'):
         alpha_c = theano.shared(numpy.float32(alpha_c), name='alpha_c')
-        alpha_reg = alpha_c * (
-            (tensor.cast(y_mask.sum(0)//x_mask.sum(0), 'float32')[:, None] -
-             opt_ret['dec_alphas'].sum(0))**2).sum(1).mean()
+        alpha_reg = alpha_c * ((tensor.cast(
+            y_mask.sum(0) // x_mask.sum(0), 'float32')[:, None] -
+                                opt_ret['dec_alphas'].sum(0))**2).sum(1).mean()
         cost += alpha_reg
 
     # after all regularizers - compile the computational graph for cost
@@ -161,9 +159,8 @@ def train(dim_word_src=100,  # source word vector dimensionality
             g2 += (g**2).sum()
         new_grads = []
         for g in grads:
-            new_grads.append(tensor.switch(g2 > (clip_c**2),
-                                           g / tensor.sqrt(g2) * clip_c,
-                                           g))
+            new_grads.append(tensor.switch(g2 > (clip_c**2), g / tensor.sqrt(
+                g2) * clip_c, g))
         grads = new_grads
 
     # compile the optimizer, the actual computational graph is compiled here
@@ -196,17 +193,9 @@ def train(dim_word_src=100,  # source word vector dimensionality
             use_noise.set_value(1.)
             for i in xrange(train_len):
                 x, x_mask, y, y_mask = next(train_it)
-                if x is None:
-                    print('Minibatch with zero sample under length ', maxlen)
-                    continue
-                if len(x) == 0:
-                    print('No input is present ', x)
-                    continue
 
-                # compute cost, grads and copy grads to shared variables
                 cost = f_grad_shared(x, x_mask, y, y_mask)
 
-                # do the update on parameters
                 f_update(lrate)
 
             print('Train cost:', cost)
@@ -221,7 +210,6 @@ def train(dim_word_src=100,  # source word vector dimensionality
             use_noise.set_value(0.)
             valid_errs = pred_probs(f_log_probs,
                                     prepare_data,
-                                    ctx_len_emb,
                                     model_options,
                                     valid_stream)
             valid_err = valid_errs.mean()

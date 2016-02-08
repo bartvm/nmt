@@ -1,3 +1,4 @@
+from __future__ import print_function
 import copy
 import os
 import numpy
@@ -111,7 +112,7 @@ def train(dim_word_src=100,  # source word vector dimensionality
         decay_c = theano.shared(numpy.float32(decay_c), name='decay_c')
         weight_decay = 0.
         for kk, vv in six.iteritems(tparams):
-            weight_decay += (vv**2).sum()
+            weight_decay += (vv ** 2).sum()
         weight_decay *= decay_c
         cost += weight_decay
 
@@ -170,11 +171,6 @@ def train(dim_word_src=100,  # source word vector dimensionality
             use_noise.set_value(1.)
 
             x, x_mask, y, y_mask = prepare_data(x, y, maxlen=maxlen)
-
-            if x is None:
-                # print 'Minibatch with zero sample under length ', maxlen
-                uidx -= 1
-                continue
 
             ud_start = time.time()
 
