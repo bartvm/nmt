@@ -121,7 +121,7 @@ def train(dim_word_src=100,  # source word vector dimensionality
         alpha_c = theano.shared(numpy.float32(alpha_c), name='alpha_c')
         alpha_reg = alpha_c * ((tensor.cast(
             y_mask.sum(0) // x_mask.sum(0), 'float32')[:, None] -
-                                opt_ret['dec_alphas'].sum(0))**2).sum(1).mean()
+            opt_ret['dec_alphas'].sum(0)) ** 2).sum(1).mean()
         cost += alpha_reg
 
     # after all regularizers - compile the computational graph for cost
@@ -137,10 +137,10 @@ def train(dim_word_src=100,  # source word vector dimensionality
     if clip_c > 0.:
         g2 = 0.
         for g in grads:
-            g2 += (g**2).sum()
+            g2 += (g ** 2).sum()
         new_grads = []
         for g in grads:
-            new_grads.append(tensor.switch(g2 > (clip_c**2), g / tensor.sqrt(
+            new_grads.append(tensor.switch(g2 > (clip_c ** 2), g / tensor.sqrt(
                 g2) * clip_c, g))
         grads = new_grads
 
@@ -173,6 +173,11 @@ def train(dim_word_src=100,  # source word vector dimensionality
             x, x_mask, y, y_mask = prepare_data(x, y, maxlen=maxlen)
 
             ud_start = time.time()
+
+            if x is None:
+                print('Minibatch with zero sample under length %d' % maxlen)
+                uidx -= 1
+                continue
 
             # compute cost, grads and copy grads to shared variables
             cost = f_grad_shared(x, x_mask, y, y_mask)
