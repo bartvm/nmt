@@ -3,8 +3,6 @@ from theano import tensor
 import numpy
 from utils import uniform_weight, ortho_weight
 
-import settings
-profile = settings.profile
 
 # layers: 'name': ('parameter initializer', 'feedforward')
 layers = {'ff': ('param_init_fflayer', 'fflayer'),
@@ -150,7 +148,7 @@ def gru_layer(tparams,
                                 non_sequences=shared_vars,
                                 name=prefix + '_layers',
                                 n_steps=nsteps,
-                                profile=profile,
+                                profile=False,
                                 strict=True)
     rval = [rval]
     return rval
@@ -304,6 +302,6 @@ def gru_cond_layer(tparams,
             non_sequences=[pctx_, context] + shared_vars,
             name=prefix + '_layers',
             n_steps=nsteps,
-            profile=profile,
+            profile=False,
             strict=True)
     return rval
