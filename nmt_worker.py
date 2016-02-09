@@ -136,7 +136,6 @@ def train(model_options, data_options,
     worker.copy_to_local()
 
     while True:
-        n_samples = 0
         step = worker.send_req('next')
         print(step)
         if step == 'train':
