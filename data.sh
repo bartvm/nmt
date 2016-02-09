@@ -28,6 +28,7 @@ function tokenize {
 
 function truecase {
   [ $# -lt 1 ] && { echo "Usage: $0 filename"; return 1; }
+  check_moses
   base="${1%.*}"
   lang="${1##*.}"
   $MOSES/scripts/recaser/train-truecaser.perl --model truecase-model.$lang --corpus $1
