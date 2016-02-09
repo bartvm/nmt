@@ -3,7 +3,6 @@ from theano import tensor
 import numpy
 from utils import uniform_weight, ortho_weight
 
-
 # layers: 'name': ('parameter initializer', 'feedforward')
 layers = {'ff': ('param_init_fflayer', 'fflayer'),
           'gru': ('param_init_gru', 'gru_layer'),
@@ -23,6 +22,10 @@ def tanh(x):
     return tensor.tanh(x)
 
 
+def sigmoid(x):
+    return tensor.nnet.sigmoid(x)
+
+
 def linear(x):
     return x
 
@@ -34,30 +37,28 @@ def _slice(_x, n, dim):
     return _x[:, n * dim:(n + 1) * dim]
 
 
-def _gru(m_, x_, xx_, h_, U, Ux, bg=None, bi=None):
+def _gru(mask, x_t2gates, x_t2prpsl, h_tm1, U, Ux, activ='tanh'):
 
-    dim = U.shape[0]
+    dim = U.shape[0]    # dimension of hidden states
 
-    preact = x_ + tensor.dot(h_, U)
-    if not (bg is None):
-        preact += bg
+    # concatenated activations of the gates in a GRU
+    activ_gates = sigmoid(x_t2gates + tensor.dot(h_tm1, U))
 
     # reset and update gates
-    r = tensor.nnet.sigmoid(_slice(preact, 0, dim))
-    u = tensor.nnet.sigmoid(_slice(preact, 1, dim))
+    reset_gate = _slice(activ_gates, 0, dim)
+    update_gate = _slice(activ_gates, 1, dim)
 
     # compute the hidden state proposal
-    preact2 = xx_ + r * tensor.dot(h_, Ux)
-    if not (bi is None):
-        preact2 += bi
-
-    h = tensor.tanh(preact2)
+    h_prpsl = eval(activ)(x_t2prpsl + reset_gate * tensor.dot(h_tm1, Ux))
 
     # leaky integrate and obtain next hidden state
-    h = u * h_ + (1. - u) * h
-    h = m_[:, None] * h + (1. - m_)[:, None] * h_
+    h_t = update_gate * h_tm1 + (1. - update_gate) * h_prpsl
 
-    return h
+    # if this time step is not valid, discard the current hidden states
+    # obtained above and copy the previous hidden states to the current ones.
+    h_t = mask[:, None] * h_t + (1. - mask)[:, None] * h_tm1
+
+    return h_t
 
 
 # feedforward layer: affine transformation + point-wise nonlinearity
@@ -270,10 +271,10 @@ def gru_cond_layer(tparams,
         alpha = alpha / alpha.sum(0, keepdims=True)
         ctx_ = (cc_ * alpha[:, :, None]).sum(0)  # current context
 
-        new_x_ = tensor.dot(ctx_, Wc)
-        new_xx_ = tensor.dot(ctx_, Wcx)
+        new_x_ = tensor.dot(ctx_, Wc) + b_nl
+        new_xx_ = tensor.dot(ctx_, Wcx) + bx_nl
 
-        h2 = _gru(m_, new_x_, new_xx_, h1, U_nl, Ux_nl, bg=b_nl, bi=bx_nl)
+        h2 = _gru(m_, new_x_, new_xx_, h1, U_nl, Ux_nl)
 
         return h2, ctx_, alpha.T  # pstate_, preact, preactx, r, u
 
