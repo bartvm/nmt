@@ -6,6 +6,7 @@ import theano
 from theano import tensor
 from theano.sandbox.rng_mrg import MRG_RandomStreams
 
+import six
 from six.moves import xrange
 import ipdb
 import numpy
@@ -16,36 +17,56 @@ import sys
 from collections import OrderedDict
 from utils import dropout_layer, norm_weight, concatenate
 from layers import get_layer
+from data_iterator import get_stream, load_dict
+
+
+def load_data(src, trg,
+              valid_src, valid_trg,
+              src_vocab, trg_vocab,
+              n_words, n_words_src,
+              batch_size, valid_batch_size):
+    print('Loading data')
+
+    dictionaries = [src_vocab, trg_vocab]
+    datasets = [src, trg]
+    valid_datasets = [valid_src, valid_trg]
+
+    # load dictionaries and invert them
+    worddicts = [None] * len(dictionaries)
+    worddicts_r = [None] * len(dictionaries)
+    for ii, dd in enumerate(dictionaries):
+        worddicts[ii] = load_dict(dd)
+        worddicts_r[ii] = dict()
+        for kk, vv in six.iteritems(worddicts[ii]):
+            worddicts_r[ii][vv] = kk
+
+    train_stream = get_stream([datasets[0]],
+                              [datasets[1]],
+                              dictionaries[0],
+                              dictionaries[1],
+                              n_words_source=n_words_src,
+                              n_words_target=n_words,
+                              batch_size=batch_size)
+    valid_stream = get_stream([valid_datasets[0]],
+                              [valid_datasets[1]],
+                              dictionaries[0],
+                              dictionaries[1],
+                              n_words_source=n_words_src,
+                              n_words_target=n_words,
+                              batch_size=valid_batch_size)
+
+    return worddicts_r, train_stream, valid_stream
 
 
 # batch preparation
-def prepare_data(seqs_x, seqs_y, maxlen=None):
+def prepare_data(seqs_x, seqs_y):
     # x: a list of sentences
     lengths_x = [len(s) for s in seqs_x]
     lengths_y = [len(s) for s in seqs_y]
 
-    if maxlen is not None:
-        new_seqs_x = []
-        new_seqs_y = []
-        new_lengths_x = []
-        new_lengths_y = []
-        for l_x, s_x, l_y, s_y in zip(lengths_x, seqs_x, lengths_y, seqs_y):
-            if l_x < maxlen and l_y < maxlen:
-                new_seqs_x.append(s_x)
-                new_lengths_x.append(l_x)
-                new_seqs_y.append(s_y)
-                new_lengths_y.append(l_y)
-        lengths_x = new_lengths_x
-        seqs_x = new_seqs_x
-        lengths_y = new_lengths_y
-        seqs_y = new_seqs_y
-
-        if len(lengths_x) < 1 or len(lengths_y) < 1:
-            return None, None, None, None
-
     n_samples = len(seqs_x)
-    maxlen_x = numpy.max(lengths_x) + 1
-    maxlen_y = numpy.max(lengths_y) + 1
+    maxlen_x = numpy.max(lengths_x)
+    maxlen_y = numpy.max(lengths_y)
 
     x = numpy.zeros((maxlen_x, n_samples)).astype('int64')
     y = numpy.zeros((maxlen_y, n_samples)).astype('int64')
@@ -53,9 +74,9 @@ def prepare_data(seqs_x, seqs_y, maxlen=None):
     y_mask = numpy.zeros((maxlen_y, n_samples)).astype('float32')
     for idx, [s_x, s_y] in enumerate(zip(seqs_x, seqs_y)):
         x[:lengths_x[idx], idx] = s_x
-        x_mask[:lengths_x[idx] + 1, idx] = 1.
+        x_mask[:lengths_x[idx], idx] = 1.
         y[:lengths_y[idx], idx] = s_y
-        y_mask[:lengths_y[idx] + 1, idx] = 1.
+        y_mask[:lengths_y[idx], idx] = 1.
 
     return x, x_mask, y, y_mask
 

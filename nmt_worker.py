@@ -1,102 +1,51 @@
 from __future__ import print_function
-import theano
-from theano import tensor
 
-import six
-from six.moves import xrange
-
-from six.moves import cPickle
-import numpy
 import copy
-
 import os
 import sys
 
+import numpy
+import six
+import theano
+import yaml
 from platoon.channel import Worker
 from platoon.param_sync import EASGD
-
-
-from data_iterator import get_stream, load_dict
-from utils import unzip, init_tparams, load_params, itemlist
+from six.moves import xrange, cPickle
+from theano import tensor
+from toolz.dicttoolz import merge
 
 import optimizers
-
 from nmt_base import (prepare_data, init_params, build_model, build_sampler,
-                      pred_probs)
+                      pred_probs, load_data)
+from utils import unzip, init_tparams, load_params, itemlist
 
 
-def train(dim_word_src=100,  # source word vector dimensionality
-          dim_word_trg=100,  # target word vector dimensionality
-          dim=1000,  # the number of LSTM units
-          encoder='gru',
-          decoder='gru_cond',
-          patience=10,  # early stopping patience
-          max_epochs=5000,
-          finish_after=10000000,  # finish after this many updates
-          dispFreq=100,
-          decay_c=0.,  # L2 regularization penalty
-          alpha_c=0.,  # alignment regularization
-          clip_c=-1.,  # gradient clipping threshold
-          lrate=0.01,  # learning rate
-          n_words_src=3000,  # source vocabulary size
-          n_words=3000,  # target vocabulary size
-          maxlen=15,  # maximum length of the description
-          optimizer='rmsprop',
-          batch_size=64,
-          valid_batch_size=64,
-          train_len=1,
-          saveto='model.npz',
-          validFreq=1000,
-          saveFreq=1000,   # save the parameters after every saveFreq updates
-          sampleFreq=100,   # generate some samples after every sampleFreq
-          datasets=[
-              '/u/goyalani/dl4mt-material/europarl-v7.fr-en.en.tok',
-              '/u/goyalani/dl4mt-material/europarl-v7.fr-en.fr.tok'],
-          valid_datasets=['/u/goyalani/dl4mt-material/newstest2011.en.tok',
-                          '/u/goyalani/dl4mt-material/newstest2011.fr.tok'],
-          dictionaries=[
-              '/u/goyalani/dl4mt-material/europarl-v7.fr-en.en.tok.pkl',
-              '/u/goyalani/dl4mt-material/europarl-v7.fr-en.fr.tok.pkl'],
-
-          use_dropout=False,
-          overwrite=False,
-          valid_sync=False,
+def train(model_options, data_options,
+          patience,  # early stopping patience
+          max_epochs,
+          finish_after,  # finish after this many updates
+          disp_freq,
+          decay_c,  # L2 regularization penalty
+          alpha_c,  # alignment regularization
+          clip_c,  # gradient clipping threshold
+          lrate,  # learning rate
+          optimizer,
+          saveto,
+          valid_freq,
+          train_len,
+          valid_sync,
+          save_freq,   # save the parameters after every saveFreq updates
+          sample_freq,   # generate some samples after every sampleFreq
           reload_=False):
 
     worker = Worker(control_port=5567)
 
-    # Model options
-    model_options = locals().copy()
-
-    # load dictionaries and invert them
-    worddicts = [None] * len(dictionaries)
-    worddicts_r = [None] * len(dictionaries)
-    for ii, dd in enumerate(dictionaries):
-        worddicts[ii] = load_dict(dd)
-        worddicts_r[ii] = dict()
-        for kk, vv in six.iteritems(worddicts[ii]):
-            worddicts_r[ii][vv] = kk
-
     # reload options
     if reload_ and os.path.exists(saveto):
         with open('%s.pkl' % saveto, 'rb') as f:
-            models_options = cPickle.load(f, encoding='latin')
+            model_options = cPickle.load(f, encoding='latin1')
 
-    print('Loading data')
-    train_stream = get_stream([datasets[0]],
-                              [datasets[1]],
-                              dictionaries[0],
-                              dictionaries[1],
-                              n_words_source=n_words_src,
-                              n_words_target=n_words,
-                              batch_size=batch_size)
-    valid_stream = get_stream([valid_datasets[0]],
-                              [valid_datasets[1]],
-                              dictionaries[0],
-                              dictionaries[1],
-                              n_words_source=n_words_src,
-                              n_words_target=n_words,
-                              batch_size=valid_batch_size)
+    worddicts_r, train_stream, valid_stream = load_data(**data_options)
 
     print('Building model')
     params = init_params(model_options)
@@ -140,13 +89,14 @@ def train(dim_word_src=100,  # source word vector dimensionality
         alpha_c = theano.shared(numpy.float32(alpha_c), name='alpha_c')
         alpha_reg = alpha_c * ((tensor.cast(
             y_mask.sum(0) // x_mask.sum(0), 'float32')[:, None] -
-                                opt_ret['dec_alphas'].sum(0))**2).sum(1).mean()
+            opt_ret['dec_alphas'].sum(0)) ** 2).sum(1).mean()
         cost += alpha_reg
 
+    # Not used?
     # after all regularizers - compile the computational graph for cost
-    print('Building f_cost...', end=' ')
-    f_cost = theano.function(inps, cost, profile=False)
-    print('Done')
+    # print('Building f_cost...', end=' ')
+    # f_cost = theano.function(inps, cost, profile=False)
+    # print('Done')
 
     print('Computing gradient...', end=' ')
     grads = tensor.grad(cost, wrt=itemlist(tparams))
@@ -156,10 +106,10 @@ def train(dim_word_src=100,  # source word vector dimensionality
     if clip_c > 0.:
         g2 = 0.
         for g in grads:
-            g2 += (g**2).sum()
+            g2 += (g ** 2).sum()
         new_grads = []
         for g in grads:
-            new_grads.append(tensor.switch(g2 > (clip_c**2), g / tensor.sqrt(
+            new_grads.append(tensor.switch(g2 > (clip_c ** 2), g / tensor.sqrt(
                 g2) * clip_c, g))
         grads = new_grads
 
@@ -177,7 +127,7 @@ def train(dim_word_src=100,  # source word vector dimensionality
     def train_iter():
         while True:
             for x, y in train_stream.get_epoch_iterator():
-                x, x_mask, y, y_mask = prepare_data(x, y, maxlen=maxlen)
+                x, x_mask, y, y_mask = prepare_data(x, y)
                 yield x, x_mask, y, y_mask
 
     train_it = train_iter()
@@ -186,7 +136,6 @@ def train(dim_word_src=100,  # source word vector dimensionality
     worker.copy_to_local()
 
     while True:
-        n_samples = 0
         step = worker.send_req('next')
         print(step)
         if step == 'train':
@@ -247,57 +196,8 @@ def train(dim_word_src=100,  # source word vector dimensionality
     numpy.savez(saveto, zipped_params=best_p, **params)
 
 
-def main(job_id, params):
-    print(params)
-    basedir = params['basedir'][0]
-    train(saveto=params['model'][0],
-          reload_=params['reload'][0],
-          dim=params['dim'][0],
-          n_words=params['n-words'][0],
-          n_words_src=params['n-words'][0],
-          decay_c=params['decay-c'][0],
-          clip_c=params['clip-c'][0],
-          lrate=params['learning-rate'][0],
-          optimizer=params['optimizer'][0],
-          maxlen=80,
-          batch_size=64,
-          valid_batch_size=64,
-          datasets=[
-            ('%s/wmt16/'
-             'wmt16.de-en.tok.true.clean.shuf.en' % basedir),
-            ('%s/wmt16/'
-             'wmt16.de-en.tok.true.clean.shuf.de' % basedir)
-          ],
-          valid_datasets=[
-            '%s/wmt16/newstest2011.en.tok' % basedir,
-            '%s/wmt16/newstest2011.fr.tok' % basedir
-          ],
-          dictionaries=[
-                ('%s/wmt16/'
-                 'wmt16.de-en.vocab.en' % basedir),
-                ('%s/wmt16/'
-                 'wmt16.de-en.vocab.de' % basedir)
-          ],
-          validFreq=500000,
-          dispFreq=1,
-          saveFreq=100,
-          sampleFreq=50,
-          use_dropout=params['use-dropout'][0])
-    return
-
-
-if __name__ == '__main__':
-    basedir = '/home/vanmerb'
-    mode = sys.argv[1]
-    main(0, {
-        'mode': [mode],
-        'basedir': [basedir],
-        'model': ['%s/model/model_attention.npz' % basedir],
-        'dim': [124],
-        'n-words': [3000],
-        'optimizer': ['adadelta'],
-        'decay-c': [0.],
-        'clip-c': [1.],
-        'use-dropout': [False],
-        'learning-rate': [0.001],
-        'reload': [False]})
+if __name__ == "__main__":
+    with open(sys.argv[1]) as f:
+        config = yaml.load(f)
+    train(config['model'], config['data'],
+          **merge(config['training'], config['management'], config['multi']))
