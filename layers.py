@@ -3,31 +3,9 @@ from theano import tensor
 import numpy
 from utils import uniform_weight, ortho_weight
 
-# layers: 'name': ('parameter initializer', 'feedforward')
-layers = {'ff': ('param_init_fflayer', 'fflayer'),
-          'gru': ('param_init_gru', 'gru_layer'),
-          'gru_cond': ('param_init_gru_cond', 'gru_cond_layer'), }
-
-
-def get_layer(name):
-    fns = layers[name]
-    return (eval(fns[0]), eval(fns[1]))
-
 
 def zero_vector(length):
     return numpy.zeros((length, )).astype('float32')
-
-
-def tanh(x):
-    return tensor.tanh(x)
-
-
-def sigmoid(x):
-    return tensor.nnet.sigmoid(x)
-
-
-def linear(x):
-    return x
 
 
 # utility function to slice a tensor
@@ -37,19 +15,20 @@ def _slice(_x, n, dim):
     return _x[:, n * dim:(n + 1) * dim]
 
 
-def _gru(mask, x_t2gates, x_t2prpsl, h_tm1, U, Ux, activ='tanh'):
+def _gru(mask, x_t2gates, x_t2prpsl, h_tm1, U, Ux, activ=tensor.tanh):
 
     dim = U.shape[0]    # dimension of hidden states
 
     # concatenated activations of the gates in a GRU
-    activ_gates = sigmoid(x_t2gates + tensor.dot(h_tm1, U))
+    activ_gates = tensor.nnet.sigmoid(x_t2gates + tensor.dot(h_tm1, U))
 
     # reset and update gates
     reset_gate = _slice(activ_gates, 0, dim)
     update_gate = _slice(activ_gates, 1, dim)
 
     # compute the hidden state proposal
-    h_prpsl = eval(activ)(x_t2prpsl + reset_gate * tensor.dot(h_tm1, Ux))
+    in_prpsl = x_t2prpsl + reset_gate * tensor.dot(h_tm1, Ux)
+    h_prpsl = activ(in_prpsl) if activ else in_prpsl
 
     # leaky integrate and obtain next hidden state
     h_t = update_gate * h_tm1 + (1. - update_gate) * h_prpsl
@@ -101,10 +80,11 @@ def fflayer(tparams,
             state_below,
             options,
             prefix='rconv',
-            activ='lambda x: tensor.tanh(x)',
+            activ=tensor.tanh,
             **kwargs):
-    return eval(activ)(tensor.dot(state_below, tparams[prefix + '_W']) +
-                       tparams[prefix + '_b'])
+    h = (tensor.dot(state_below, tparams[prefix + '_W']) +
+         tparams[prefix + '_b'])
+    return activ(h) if activ else h
 
 
 # GRU layer
@@ -322,3 +302,13 @@ def gru_cond_layer(tparams,
             profile=False,
             strict=True)
     return rval
+
+# layers: 'name': ('parameter initializer', 'feedforward')
+layers = {'ff': (param_init_fflayer, fflayer),
+          'gru': (param_init_gru, gru_layer),
+          'gru_cond': (param_init_gru_cond, gru_cond_layer)}
+
+
+def get_layer(name):
+    param_init, layer = layers[name]
+    return param_init, layer
