@@ -8,18 +8,6 @@ def zero_vector(length):
     return numpy.zeros((length, )).astype('float32')
 
 
-def tanh(x):
-    return tensor.tanh(x)
-
-
-def sigmoid(x):
-    return tensor.nnet.sigmoid(x)
-
-
-def linear(x):
-    return x
-
-
 # utility function to slice a tensor
 def _slice(_x, n, dim):
     if _x.ndim == 3:
@@ -32,7 +20,7 @@ def _gru(mask, x_t2gates, x_t2prpsl, h_tm1, U, Ux, activ=tensor.tanh):
     dim = U.shape[0]    # dimension of hidden states
 
     # concatenated activations of the gates in a GRU
-    activ_gates = sigmoid(x_t2gates + tensor.dot(h_tm1, U))
+    activ_gates = tensor.nnet.sigmoid(x_t2gates + tensor.dot(h_tm1, U))
 
     # reset and update gates
     reset_gate = _slice(activ_gates, 0, dim)
