@@ -3,17 +3,17 @@ from itertools import count
 from fuel.datasets.text import TextFile
 from fuel.transformers import Merge
 from fuel.schemes import ConstantScheme
-from fuel.transformers import Batch, Cache, Mapping, SortMapping
+from fuel.transformers import Batch, Cache, Mapping, SortMapping, Padding
 
 
 def _source_length(sentence_pair):
-    """Returns the length of the first element of a sequence.
+    """Returns the length of the second element of a sequence.
 
     This function is used to sort sentence pairs by the length of the
-    source sentence.
+    target sentence.
 
     """
-    return len(sentence_pair[0])
+    return len(sentence_pair[1])
 
 
 def load_dict(filename, n_words=0):
@@ -80,6 +80,6 @@ def get_stream(source, target, source_dict, target_dict, batch_size=128,
     )
     sorted_batches = Mapping(large_batches, SortMapping(_source_length))
     batches = Cache(sorted_batches, ConstantScheme(batch_size))
-    # masked_batches = Padding(batches)
+    masked_batches = Padding(batches)
 
-    return batches
+    return masked_batches

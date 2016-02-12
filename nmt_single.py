@@ -12,7 +12,7 @@ from theano import tensor
 from six.moves import xrange, cPickle
 from toolz.dicttoolz import merge
 
-from nmt_base import (prepare_data, pred_probs, build_model,
+from nmt_base import (pred_probs, build_model,
                       build_sampler, init_params, gen_sample, load_data)
 from utils import load_params, init_tparams, zipp, unzip, itemlist
 import optimizers
@@ -125,12 +125,13 @@ def train(model_options, data_options,
     for eidx in xrange(max_epochs):
         n_samples = 0
 
-        for x, y in train_stream.get_epoch_iterator():
+        for x, x_mask, y, y_mask in train_stream.get_epoch_iterator():
             n_samples += len(x)
+
+            x, x_mask, y, y_mask = x.T, x_mask.T, y.T, y_mask.T
+
             uidx += 1
             use_noise.set_value(1.)
-
-            x, x_mask, y, y_mask = prepare_data(x, y)
 
             ud_start = time.time()
 
@@ -216,7 +217,7 @@ def train(model_options, data_options,
             # validate model on validation set and early stop if necessary
             if numpy.mod(uidx, valid_freq) == 0:
                 use_noise.set_value(0.)
-                valid_errs = pred_probs(f_log_probs, prepare_data,
+                valid_errs = pred_probs(f_log_probs,
                                         model_options, valid_stream)
                 valid_err = valid_errs.mean()
                 history_errs.append(valid_err)
@@ -252,7 +253,7 @@ def train(model_options, data_options,
         zipp(best_p, tparams)
 
     use_noise.set_value(0.)
-    valid_err = pred_probs(f_log_probs, prepare_data, model_options,
+    valid_err = pred_probs(f_log_probs, model_options,
                            valid_stream).mean()
 
     print('Valid ', valid_err)

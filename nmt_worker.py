@@ -15,7 +15,7 @@ from theano import tensor
 from toolz.dicttoolz import merge
 
 import optimizers
-from nmt_base import (prepare_data, init_params, build_model, build_sampler,
+from nmt_base import (init_params, build_model, build_sampler,
                       pred_probs, load_data)
 from utils import unzip, init_tparams, load_params, itemlist
 
@@ -126,9 +126,8 @@ def train(model_options, data_options,
     # Training data iterator!
     def train_iter():
         while True:
-            for x, y in train_stream.get_epoch_iterator():
-                x, x_mask, y, y_mask = prepare_data(x, y)
-                yield x, x_mask, y, y_mask
+            for x, x_mask, y, y_mask in train_stream.get_epoch_iterator():
+                yield x.T, x_mask.T, y.T, y_mask.T
 
     train_it = train_iter()
 
@@ -158,7 +157,6 @@ def train(model_options, data_options,
                 worker.copy_to_local()
             use_noise.set_value(0.)
             valid_errs = pred_probs(f_log_probs,
-                                    prepare_data,
                                     model_options,
                                     valid_stream)
             valid_err = valid_errs.mean()
