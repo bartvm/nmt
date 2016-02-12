@@ -197,7 +197,7 @@ def build_model(tparams, options):
                                     ctx_mean,
                                     options,
                                     prefix='ff_state',
-                                    activ='tanh')
+                                    activ=tensor.tanh)
 
     # word embedding (target), we will shift the target sequence one time step
     # to the right. This is done because of the bi-gram connections in the
@@ -233,17 +233,17 @@ def build_model(tparams, options):
                                     proj_h,
                                     options,
                                     prefix='ff_logit_lstm',
-                                    activ='linear')
+                                    activ=None)
     logit_prev = get_layer('ff')[1](tparams,
                                     emb,
                                     options,
                                     prefix='ff_logit_prev',
-                                    activ='linear')
+                                    activ=None)
     logit_ctx = get_layer('ff')[1](tparams,
                                    ctxs,
                                    options,
                                    prefix='ff_logit_ctx',
-                                   activ='linear')
+                                   activ=None)
     logit = tensor.tanh(logit_lstm + logit_prev + logit_ctx)
     if options['use_dropout']:
         logit = dropout_layer(logit, use_noise, trng)
@@ -251,7 +251,7 @@ def build_model(tparams, options):
                                logit,
                                options,
                                prefix='ff_logit',
-                               activ='linear')
+                               activ=None)
     logit_shp = logit.shape
     probs = tensor.nnet.softmax(logit.reshape([logit_shp[0] * logit_shp[1],
                                                logit_shp[2]]))
@@ -299,7 +299,7 @@ def build_sampler(tparams, options, trng):
                                     ctx_mean,
                                     options,
                                     prefix='ff_state',
-                                    activ='tanh')
+                                    activ=tensor.tanh)
 
     print('Building f_init...', end=' ')
     outs = [init_state, ctx]
@@ -334,23 +334,23 @@ def build_sampler(tparams, options, trng):
                                     next_state,
                                     options,
                                     prefix='ff_logit_lstm',
-                                    activ='linear')
+                                    activ=None)
     logit_prev = get_layer('ff')[1](tparams,
                                     emb,
                                     options,
                                     prefix='ff_logit_prev',
-                                    activ='linear')
+                                    activ=None)
     logit_ctx = get_layer('ff')[1](tparams,
                                    ctxs,
                                    options,
                                    prefix='ff_logit_ctx',
-                                   activ='linear')
+                                   activ=None)
     logit = tensor.tanh(logit_lstm + logit_prev + logit_ctx)
     logit = get_layer('ff')[1](tparams,
                                logit,
                                options,
                                prefix='ff_logit',
-                               activ='linear')
+                               activ=None)
 
     # compute the softmax probability
     next_probs = tensor.nnet.softmax(logit)
