@@ -61,6 +61,28 @@ def _gru(mask, x_t2gates, x_t2prpsl, h_tm1, U, Ux, activ='tanh'):
     return h_t
 
 
+def _compute_alignment(h_tm1,       # s_{i-1}
+                       prj_annot,   # proj annotations: U_a * h_j for all j
+                       Wd_att, U_att, c_att,
+                       context_mask=None):
+
+    # W_a * s_{i-1}
+    prj_h_tm1 = tensor.dot(h_tm1, Wd_att)
+
+    # tanh(W_a * s_{i-1} + U_a * h_j) for all j
+    nonlin_proj = tensor.tanh(prj_h_tm1[None, :, :] + prj_annot)
+
+    # v_a^{T} * tanh(.) + bias
+    alpha = tensor.dot(nonlin_proj, U_att) + c_att
+    alpha = alpha.reshape([alpha.shape[0], alpha.shape[1]])
+    alpha = tensor.exp(alpha)
+    if context_mask:
+        alpha = alpha * context_mask
+    alpha = alpha / alpha.sum(0, keepdims=True)
+
+    return alpha
+
+
 # feedforward layer: affine transformation + point-wise nonlinearity
 def param_init_fflayer(options,
                        param,
@@ -259,16 +281,10 @@ def gru_cond_layer(tparams,
         h1 = _gru(m_, x_, xx_, h_, U, Ux)
 
         # attention
-        pstate_ = tensor.dot(h1, W_comb_att)
-        pctx__ = pctx_ + pstate_[None, :, :]
-        # pctx__ += xc_
-        pctx__ = tensor.tanh(pctx__)
-        alpha = tensor.dot(pctx__, U_att) + c_att
-        alpha = alpha.reshape([alpha.shape[0], alpha.shape[1]])
-        alpha = tensor.exp(alpha)
-        if context_mask:
-            alpha = alpha * context_mask
-        alpha = alpha / alpha.sum(0, keepdims=True)
+        alpha = _compute_alignment(h1, pctx_,
+                                   W_comb_att, U_att, c_att,
+                                   context_mask=context_mask)
+
         ctx_ = (cc_ * alpha[:, :, None]).sum(0)  # current context
 
         new_x_ = tensor.dot(ctx_, Wc) + b_nl
