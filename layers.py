@@ -151,7 +151,6 @@ def gru_layer(tparams,
                                 non_sequences=shared_vars,
                                 name=prefix + '_layers',
                                 n_steps=nsteps,
-                                profile=False,
                                 strict=True)
     rval = [rval]
     return rval
@@ -299,7 +298,6 @@ def gru_cond_layer(tparams,
             non_sequences=[pctx_, context] + shared_vars,
             name=prefix + '_layers',
             n_steps=nsteps,
-            profile=False,
             strict=True)
     return rval
 
