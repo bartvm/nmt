@@ -58,29 +58,6 @@ def load_data(src, trg,
     return worddicts_r, train_stream, valid_stream
 
 
-# batch preparation
-def prepare_data(seqs_x, seqs_y):
-    # x: a list of sentences
-    lengths_x = [len(s) for s in seqs_x]
-    lengths_y = [len(s) for s in seqs_y]
-
-    n_samples = len(seqs_x)
-    maxlen_x = numpy.max(lengths_x)
-    maxlen_y = numpy.max(lengths_y)
-
-    x = numpy.zeros((maxlen_x, n_samples)).astype('int64')
-    y = numpy.zeros((maxlen_y, n_samples)).astype('int64')
-    x_mask = numpy.zeros((maxlen_x, n_samples)).astype('float32')
-    y_mask = numpy.zeros((maxlen_y, n_samples)).astype('float32')
-    for idx, [s_x, s_y] in enumerate(zip(seqs_x, seqs_y)):
-        x[:lengths_x[idx], idx] = s_x
-        x_mask[:lengths_x[idx], idx] = 1.
-        y[:lengths_y[idx], idx] = s_y
-        y_mask[:lengths_y[idx], idx] = 1.
-
-    return x, x_mask, y, y_mask
-
-
 # initialize all parameters
 def init_params(options):
     params = OrderedDict()
@@ -476,15 +453,15 @@ def gen_sample(tparams,
 
 
 # calculate the log probablities on a given corpus using translation model
-def pred_probs(f_log_probs, prepare_data, options, stream, verbose=True):
+def pred_probs(f_log_probs, options, stream, verbose=True):
     probs = []
 
     n_done = 0
 
-    for x, y in stream.get_epoch_iterator():
+    for x, x_mask, y, y_mask in stream.get_epoch_iterator():
         n_done += len(x)
 
-        x, x_mask, y, y_mask = prepare_data(x, y)
+        x, x_mask, y, y_mask = x.T, x_mask.T, y.T, y_mask.T
 
         pprobs = f_log_probs(x, x_mask, y, y_mask)
         for pp in pprobs:

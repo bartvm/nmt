@@ -3,27 +3,31 @@ from itertools import count
 from fuel.datasets.text import TextFile
 from fuel.transformers import Merge
 from fuel.schemes import ConstantScheme
-from fuel.transformers import Batch, Cache, Mapping, SortMapping
+from fuel.transformers import Batch, Cache, Mapping, SortMapping, Padding
+
+
+EOS_TOKEN = '<EOS>'  # 0
+UNK_TOKEN = '<UNK>'  # 1
 
 
 def _source_length(sentence_pair):
-    """Returns the length of the first element of a sequence.
+    """Returns the length of the second element of a sequence.
 
     This function is used to sort sentence pairs by the length of the
-    source sentence.
+    target sentence.
 
     """
-    return len(sentence_pair[0])
+    return len(sentence_pair[1])
 
 
 def load_dict(filename, n_words=0):
     """Load vocab from TSV with words in last column."""
-    dict_ = {'<UNK>': 0}
+    dict_ = {EOS_TOKEN: 0, UNK_TOKEN: 1}
     with open(filename) as f:
         if n_words > 0:
-            indices = range(1, n_words)
+            indices = range(len(dict_), n_words)
         else:
-            indices = count(1)
+            indices = count(len(dict_))
         dict_.update(zip(map(lambda x: x.split()[-1], f), indices))
     return dict_
 
@@ -60,17 +64,16 @@ def get_stream(source, target, source_dict, target_dict, batch_size=128,
         raise ValueError("number of source and target files don't match")
 
     # Read the dictionaries
-    dicts = []
-    for dict_file, dict_size in zip([source_dict, target_dict],
-                                    [n_words_source, n_words_target]):
-        dicts.append(load_dict(dict_file, dict_size))
+    dicts = [load_dict(source_dict, n_words=n_words_source),
+             load_dict(target_dict, n_words=n_words_target)]
 
     # Open the two sets of files and merge them
-    streams = []
-    for lang_files, dictionary in zip([source, target], dicts):
-        dataset = TextFile(lang_files, dictionary, bos_token=None,
-                           eos_token=None)
-        streams.append(dataset.get_example_stream())
+    streams = [
+        TextFile(source, dicts[0], bos_token=None,
+                 eos_token=EOS_TOKEN).get_example_stream(),
+        TextFile(target, dicts[1], bos_token=None,
+                 eos_token=EOS_TOKEN).get_example_stream()
+    ]
     merged = Merge(streams, ('source', 'target'))
 
     # Batches of approximately uniform size
@@ -80,6 +83,6 @@ def get_stream(source, target, source_dict, target_dict, batch_size=128,
     )
     sorted_batches = Mapping(large_batches, SortMapping(_source_length))
     batches = Cache(sorted_batches, ConstantScheme(batch_size))
-    # masked_batches = Padding(batches)
+    masked_batches = Padding(batches)
 
-    return batches
+    return masked_batches
