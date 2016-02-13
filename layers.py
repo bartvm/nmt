@@ -54,7 +54,7 @@ def _compute_alignment(h_tm1,       # s_{i-1}
     # v_a^{T} * tanh(.) + bias
     alpha = tensor.dot(nonlin_proj, U_att) + c_att
     alpha = alpha.reshape([alpha.shape[0], alpha.shape[1]])
-    alpha = tensor.exp(alpha)
+    alpha = tensor.exp(alpha - alpha.min(0, keepdims=True))
     if context_mask:
         alpha = alpha * context_mask
     alpha = alpha / alpha.sum(0, keepdims=True)
