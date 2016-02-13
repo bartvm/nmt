@@ -30,10 +30,9 @@ training: # These affect training
 management: # These don't
   reload_: false
   valid_freq: 5000
-  disp_freq: 500
   save_freq: 5000
   sample_freq: 1000
-  saveto: model.npz
+  saveto: model
 multi:
   valid_sync: false
   train_len: 1

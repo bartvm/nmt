@@ -8,11 +8,8 @@ from theano.sandbox.rng_mrg import MRG_RandomStreams
 
 import six
 from six.moves import xrange
-import ipdb
 import numpy
 import copy
-
-import sys
 
 from collections import OrderedDict
 from utils import dropout_layer, norm_weight, concatenate
@@ -453,7 +450,7 @@ def gen_sample(tparams,
 
 
 # calculate the log probablities on a given corpus using translation model
-def pred_probs(f_log_probs, options, stream, verbose=True):
+def pred_probs(f_log_probs, options, stream):
     probs = []
 
     n_done = 0
@@ -467,10 +464,7 @@ def pred_probs(f_log_probs, options, stream, verbose=True):
         for pp in pprobs:
             probs.append(pp)
 
-        if numpy.isnan(numpy.mean(probs)):
-            ipdb.set_trace()
-
-        if verbose:
-            print('%d samples computed' % (n_done), file=sys.stderr)
+        if not numpy.isfinite(numpy.mean(probs)):
+            raise RuntimeError('non-finite probabilities')
 
     return numpy.array(probs)
