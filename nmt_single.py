@@ -12,6 +12,7 @@ from theano import tensor
 from six.moves import xrange, cPickle
 from toolz.dicttoolz import merge
 
+from data_iterator import UNK_TOKEN
 from nmt_base import (pred_probs, build_model,
                       build_sampler, init_params, gen_sample, load_data)
 from utils import load_params, init_tparams, zipp, unzip, itemlist
@@ -188,7 +189,7 @@ def train(model_options, data_options,
                         if vv in worddicts_r[0]:
                             print(worddicts_r[0][vv], end=' ')
                         else:
-                            print('UNK', end=' ')
+                            print(UNK_TOKEN, end=' ')
                     print()
                     print('Truth ', jj, ' : ', end=' ')
                     for vv in y[:, jj]:
@@ -197,7 +198,7 @@ def train(model_options, data_options,
                         if vv in worddicts_r[1]:
                             print(worddicts_r[1][vv], end=' ')
                         else:
-                            print('UNK', end=' ')
+                            print(UNK_TOKEN, end=' ')
                     print()
                     print('Sample ', jj, ': ', end=' ')
                     if stochastic:
@@ -211,7 +212,7 @@ def train(model_options, data_options,
                         if vv in worddicts_r[1]:
                             print(worddicts_r[1][vv], end=' ')
                         else:
-                            print('UNK', end=' ')
+                            print(UNK_TOKEN, end=' ')
                     print()
 
             # validate model on validation set and early stop if necessary
