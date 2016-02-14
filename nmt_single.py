@@ -10,14 +10,13 @@ import time
 import numpy
 import six
 import theano
-import yaml
 from mimir import Logger
 from theano import tensor
-from six.moves import xrange, cPickle
+from six.moves import xrange
 from toolz.dicttoolz import merge
 
 from data_iterator import UNK_TOKEN
-from nmt_base import (pred_probs, build_model,
+from nmt_base import (pred_probs, build_model, save_params,
                       build_sampler, init_params, gen_sample, load_data)
 from utils import load_params, init_tparams, zipp, unzip, itemlist
 import optimizers
@@ -38,18 +37,17 @@ def train(experiment_id, model_options, data_options,
           sample_freq,   # generate some samples after every sampleFreq
           reload_=False):
 
-    # reload options
-    if reload_ and os.path.exists(saveto):
-        with io.open('%s.pkl' % saveto, 'rb') as f:
-            model_options = cPickle.load(f, encoding='latin1')
-
     worddicts_r, train_stream, valid_stream = load_data(**data_options)
 
     print('Building model')
     params = init_params(model_options)
     # reload parameters
-    if reload_ and os.path.exists(saveto):
-        params = load_params(saveto, params)
+    model_filename = '{}.model.npz'.format(experiment_id)
+    saveto_filename = '{}.npz'.format(saveto)
+    if reload_ and os.path.exists(saveto_filename):
+        print('Loading parameters from {}... '.format(saveto_filename), end='')
+        params = load_params(saveto_filename, params)
+        print('Done')
 
     tparams = init_tparams(params)
 
@@ -164,12 +162,7 @@ def train(experiment_id, model_options, data_options,
                     params = unzip(tparams)
 
                 # save params to exp_id.npz and symlink model.npz to it
-                model_filename = '{}.model.npz'.format(experiment_id)
-                saveto_filename = '{}.npz'.format(saveto)
-                numpy.savez(model_filename, **params)
-                if os.path.lexists(saveto_filename):
-                    os.remove(saveto_filename)
-                os.symlink(model_filename, saveto_filename)
+                save_params(params, model_filename, saveto_filename)
                 print('Done')
 
             # generate some samples with the model and display them
@@ -264,14 +257,14 @@ def train(experiment_id, model_options, data_options,
     print('Valid ', valid_err)
 
     params = copy.copy(best_p)
-    numpy.savez('{}.model.npz'.format(saveto), **params)
+    save_params(params, model_filename, saveto_filename)
 
     return valid_err
 
 if __name__ == "__main__":
     experiment_id = binascii.hexlify(os.urandom(3)).decode()
     with io.open(sys.argv[1]) as f:
-        config = yaml.load(f)
+        config = json.load(f)
     with open('{}.config.json'.format(experiment_id), 'w') as f:
         json.dump(config, f)
     train(experiment_id, config['model'], config['data'],

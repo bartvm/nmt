@@ -2,16 +2,17 @@
 Build a neural machine translation model with soft attention
 '''
 from __future__ import print_function
+import copy
+import os
+from collections import OrderedDict
+
+import numpy
+import six
 import theano
+from six.moves import xrange
 from theano import tensor
 from theano.sandbox.rng_mrg import MRG_RandomStreams
 
-import six
-from six.moves import xrange
-import numpy
-import copy
-
-from collections import OrderedDict
 from utils import dropout_layer, norm_weight, concatenate
 from layers import get_layer
 from data_iterator import get_stream, load_dict
@@ -468,3 +469,17 @@ def pred_probs(f_log_probs, options, stream):
             raise RuntimeError('non-finite probabilities')
 
     return numpy.array(probs)
+
+
+def save_params(params, filename, symlink=None):
+    """Save the parameters.
+
+    Saves the parameters as an ``.npz`` file. It optionally also creates a
+    symlink to this archive.
+
+    """
+    numpy.savez(filename, **params)
+    if symlink:
+        if os.path.lexists(symlink):
+            os.remove(symlink)
+        os.symlink(filename, symlink)

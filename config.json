@@ -17,7 +17,7 @@
     "sample_freq": 1000,
     "valid_freq": 5000,
     "saveto": "model",
-    "reload_": false,
+    "reload_": true,
     "save_freq": 5000
   },
   "data": {
