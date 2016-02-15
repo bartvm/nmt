@@ -52,8 +52,10 @@ def train(experiment_id, model_options, data_options,
         LOGGER.info('Loading parameters from {}'.format(saveto_filename))
         params = load_params(saveto_filename, params)
 
+    LOGGER.info('Initializing parameters')
     tparams = init_tparams(params)
 
+    # use_noise is for dropout
     trng, use_noise, \
         x, x_mask, y, y_mask, \
         opt_ret, \
@@ -220,6 +222,7 @@ def train(experiment_id, model_options, data_options,
                 log_entry['validation_cost'] = float(valid_err)
 
                 if valid_err <= min_valid_cost:
+                    min_valid_cost = valid_err
                     best_p = unzip(tparams)
                     bad_counter = 0
                 else:
@@ -259,9 +262,11 @@ def train(experiment_id, model_options, data_options,
     return valid_err
 
 if __name__ == "__main__":
-    experiment_id = binascii.hexlify(os.urandom(3)).decode()
+    # Load the configuration file
     with io.open(sys.argv[1]) as f:
         config = json.load(f)
-        shutil.copyfile(sys.argv[1], '{}.config.json'.format(experiment_id))
+    # Create unique experiment ID and backup config file
+    experiment_id = binascii.hexlify(os.urandom(3)).decode()
+    shutil.copyfile(sys.argv[1], '{}.config.json'.format(experiment_id))
     train(experiment_id, config['model'], config['data'],
           **merge(config['training'], config['management']))
