@@ -1,8 +1,8 @@
 '''
 Build a neural machine translation model with soft attention
 '''
-from __future__ import print_function
 import copy
+import logging
 import os
 from collections import OrderedDict
 
@@ -17,13 +17,16 @@ from utils import dropout_layer, norm_weight, concatenate
 from layers import get_layer
 from data_iterator import get_stream, load_dict
 
+logging.basicConfig(level=logging.INFO)
+LOGGER = logging.getLogger(__name__)
+
 
 def load_data(src, trg,
               valid_src, valid_trg,
               src_vocab, trg_vocab,
               n_words, n_words_src,
               batch_size, valid_batch_size):
-    print('Loading data')
+    LOGGER.info('Loading data')
 
     dictionaries = [src_vocab, trg_vocab]
     datasets = [src, trg]
@@ -276,10 +279,9 @@ def build_sampler(tparams, options, trng):
                                     prefix='ff_state',
                                     activ=tensor.tanh)
 
-    print('Building f_init...', end=' ')
+    LOGGER.info('Building f_init')
     outs = [init_state, ctx]
     f_init = theano.function([x], outs, name='f_init', profile=False)
-    print('Done')
 
     # x: 1 x 1
     y = tensor.vector('y_sampler', dtype='int64')
@@ -335,11 +337,10 @@ def build_sampler(tparams, options, trng):
 
     # compile a function to do the whole thing above, next word probability,
     # sampled word for the next target, next hidden state to be used
-    print('Building f_next..', end=' ')
+    LOGGER.info('Building f_next')
     inps = [y, ctx, init_state]
     outs = [next_probs, next_sample, next_state]
     f_next = theano.function(inps, outs, name='f_next', profile=False)
-    print('Done')
 
     return f_init, f_next
 

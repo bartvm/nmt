@@ -1,9 +1,10 @@
-from __future__ import print_function
 import binascii
 import copy
 import io
 import json
+import logging
 import os
+import shutil
 import sys
 import time
 
@@ -20,6 +21,9 @@ from nmt_base import (pred_probs, build_model, save_params,
                       build_sampler, init_params, gen_sample, load_data)
 from utils import load_params, init_tparams, zipp, unzip, itemlist
 import optimizers
+
+logging.basicConfig(level=logging.INFO)
+LOGGER = logging.getLogger(__name__)
 
 
 def train(experiment_id, model_options, data_options,
@@ -39,15 +43,14 @@ def train(experiment_id, model_options, data_options,
 
     worddicts_r, train_stream, valid_stream = load_data(**data_options)
 
-    print('Building model')
+    LOGGER.info('Building model')
     params = init_params(model_options)
     # reload parameters
     model_filename = '{}.model.npz'.format(experiment_id)
     saveto_filename = '{}.npz'.format(saveto)
     if reload_ and os.path.exists(saveto_filename):
-        print('Loading parameters from {}... '.format(saveto_filename), end='')
+        LOGGER.info('Loading parameters from {}'.format(saveto_filename))
         params = load_params(saveto_filename, params)
-        print('Done')
 
     tparams = init_tparams(params)
 
@@ -58,13 +61,12 @@ def train(experiment_id, model_options, data_options,
         build_model(tparams, model_options)
     inps = [x, x_mask, y, y_mask]
 
-    print('Building sampler')
+    LOGGER.info('Building sampler')
     f_init, f_next = build_sampler(tparams, model_options, trng)
 
     # before any regularizer
-    print('Building f_log_probs...', end=' ')
+    LOGGER.info('Building f_log_probs')
     f_log_probs = theano.function(inps, cost, profile=False)
-    print('Done')
 
     cost = cost.mean()
 
@@ -87,13 +89,11 @@ def train(experiment_id, model_options, data_options,
 
     # Not used?
     # after all regularizers - compile the computational graph for cost
-    # print('Building f_cost...', end=' ')
+    # LOGGER.info('Building f_cost')
     # f_cost = theano.function(inps, cost, profile=False)
-    # print('Done')
 
-    print('Computing gradient...', end=' ')
+    LOGGER.info('Computing gradient')
     grads = tensor.grad(cost, wrt=itemlist(tparams))
-    print('Done')
 
     # apply gradient clipping here
     if clip_c > 0.:
@@ -108,12 +108,11 @@ def train(experiment_id, model_options, data_options,
 
     # compile the optimizer, the actual computational graph is compiled here
     lr = tensor.scalar(name='lr')
-    print('Building optimizers...', end=' ')
+    LOGGER.info('Building optimizers')
     f_grad_shared, f_update = getattr(optimizers, optimizer)(lr, tparams,
                                                              grads, inps, cost)
-    print('Done')
 
-    print('Optimization')
+    LOGGER.info('Optimization')
 
     log = Logger(filename='{}.log.jsonl.gz'.format(experiment_id))
     train_start = time.clock()
@@ -149,12 +148,12 @@ def train(experiment_id, model_options, data_options,
             # check for bad numbers, usually we remove non-finite elements
             # and continue training - but not done here
             if not numpy.isfinite(cost):
-                print('NaN detected')
+                LOGGER.error('NaN detected')
                 return 1., 1., 1.
 
             # save the best model so far
             if numpy.mod(uidx, save_freq) == 0:
-                print('Saving...', end=' ')
+                LOGGER.info('Saving best model so far')
 
                 if best_p is not None:
                     params = best_p
@@ -163,7 +162,6 @@ def train(experiment_id, model_options, data_options,
 
                 # save params to exp_id.npz and symlink model.npz to it
                 save_params(params, model_filename, saveto_filename)
-                print('Done')
 
             # generate some samples with the model and display them
             if numpy.mod(uidx, sample_freq) == 0:
@@ -235,13 +233,13 @@ def train(experiment_id, model_options, data_options,
 
             # finish after this many updates
             if uidx >= finish_after:
-                print('Finishing after %d iterations!' % uidx)
+                LOGGER.info('Finishing after {} iterations'.format(uidx))
                 estop = True
                 break
 
             log.log(log_entry)
 
-        print('Seen %d samples' % n_samples)
+        LOGGER.info('Completed epoch, seen {} samples'.format(n_samples))
 
         if estop:
             log.log(log_entry)
@@ -251,10 +249,9 @@ def train(experiment_id, model_options, data_options,
         zipp(best_p, tparams)
 
     use_noise.set_value(0.)
+    LOGGER.info('Calculating validation cost')
     valid_err = pred_probs(f_log_probs, model_options,
                            valid_stream).mean()
-
-    print('Valid ', valid_err)
 
     params = copy.copy(best_p)
     save_params(params, model_filename, saveto_filename)
@@ -265,7 +262,6 @@ if __name__ == "__main__":
     experiment_id = binascii.hexlify(os.urandom(3)).decode()
     with io.open(sys.argv[1]) as f:
         config = json.load(f)
-    with open('{}.config.json'.format(experiment_id), 'w') as f:
-        json.dump(config, f)
+        shutil.copyfile(sys.argv[1], '{}.config.json'.format(experiment_id))
     train(experiment_id, config['model'], config['data'],
           **merge(config['training'], config['management']))
