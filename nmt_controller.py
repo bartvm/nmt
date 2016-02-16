@@ -5,11 +5,13 @@ import json
 import os
 import shutil
 import sys
+from multiprocessing import Process
 
 import numpy
 from mimir import ServerLogger
-
 from platoon.channel import Controller
+
+from nmt_base import load_data
 
 
 class NMTController(Controller):
@@ -17,7 +19,7 @@ class NMTController(Controller):
     This multi-process controller implements patience-based early-stopping SGD
     """
 
-    def __init__(self, experiment_id, config, control_port, max_mb):
+    def __init__(self, experiment_id, config):
         """
         Initialize the NMTController
 
@@ -27,21 +29,13 @@ class NMTController(Controller):
             A string that uniquely identifies this run.
         config : dict
             The deserialized JSON configuration file
-        control_port : int
-            The control port
-        max_mb : int
-            Max number of minibatches to train on.
-        patience: : int
-            Training stops when this many minibatches have been trained on
-            without any reported improvement.
-        valid_freq : int
-            Number of minibatches to train on between every monitoring step.
-            Should be a multiple of train_len!
+
         """
         self.config = config
-        super(NMTController, self).__init__(control_port)
+        super(NMTController, self).__init__(config['multi']['control_port'])
+        self.batch_port = config['multi']['batch_port']
         self.patience = config['training']['patience']
-        self.max_mb = int(max_mb)
+        self.max_mb = config['training']['finish_after']
 
         self.valid_freq = config['management']['valid_freq']
         self.uidx = 0
@@ -53,6 +47,19 @@ class NMTController(Controller):
         self.experiment_id = experiment_id
         ServerLogger(filename='{}.log.jsonl.gz'.format(self.experiment_id),
                      threaded=True)
+
+    def start_batch_server(self):
+        self.p = Process(target=self._send_mb)
+        self.p.daemon = True
+        self.p.start()
+
+    def _send_mb(self):
+        self.init_data(self.batch_port)
+        _, train_stream, _ = load_data(**self.config['data'])
+
+        while True:
+            for x, x_mask, y, y_mask in train_stream.get_epoch_iterator():
+                self.send_mb([x.T, x_mask.T, y.T, y_mask.T])
 
     def handle_control(self, req, worker_id):
         """
@@ -121,6 +128,6 @@ if __name__ == '__main__':
     experiment_id = binascii.hexlify(os.urandom(3)).decode()
     shutil.copyfile(sys.argv[1], '{}.config.json'.format(experiment_id))
     # Start controller
-    l = NMTController(experiment_id, config, control_port=5567,
-                      max_mb=(5000 * 1998) / 10)
+    l = NMTController(experiment_id, config)
+    l.start_batch_server()
     l.serve()

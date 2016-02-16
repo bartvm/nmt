@@ -24,7 +24,7 @@ logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger(__name__)
 
 
-def train(model_options, data_options,
+def train(worker, model_options, data_options,
           patience,  # early stopping patience
           max_epochs,
           finish_after,  # finish after this many updates
@@ -39,9 +39,13 @@ def train(model_options, data_options,
           valid_sync,
           save_freq,   # save the parameters after every saveFreq updates
           sample_freq,   # generate some samples after every sampleFreq
-          reload_=False):
+          control_port,
+          batch_port,
+          reload_):
 
-    worddicts_r, train_stream, valid_stream = load_data(**data_options)
+    LOGGER.info('Connecting to data socket and loading validation data')
+    worker.init_mb_sock(batch_port)
+    _, _, valid_stream = load_data(**data_options)
 
     LOGGER.info('Building model')
     params = init_params(model_options)
@@ -122,14 +126,6 @@ def train(model_options, data_options,
     train_start = time.clock()
     best_p = None
 
-    # Training data iterator!
-    def train_iter():
-        while True:
-            for x, x_mask, y, y_mask in train_stream.get_epoch_iterator():
-                yield x.T, x_mask.T, y.T, y_mask.T
-
-    train_it = train_iter()
-
     # Making sure that the worker start training with the most recent params
     worker.copy_to_local()
 
@@ -140,7 +136,7 @@ def train(model_options, data_options,
         if step == 'train':
             use_noise.set_value(1.)
             for i in xrange(train_len):
-                x, x_mask, y, y_mask = next(train_it)
+                x, x_mask, y, y_mask = worker.recv_mb()
 
                 uidx += 1
                 log_entry = {'iteration': uidx}
@@ -159,7 +155,7 @@ def train(model_options, data_options,
                 log_entry['train_time'] = time.clock() - train_start
                 log.log(log_entry)
 
-            step = worker.send_req(dict(done=train_len))
+            step = worker.send_req({'done': train_len})
             LOGGER.info("Syncing with global params")
             worker.sync_params(synchronous=True)
 
@@ -167,10 +163,9 @@ def train(model_options, data_options,
             if valid_sync:
                 worker.copy_to_local()
             use_noise.set_value(0.)
-            valid_errs = pred_probs(f_log_probs,
-                                    model_options, valid_stream)
+            valid_errs = pred_probs(f_log_probs, model_options, valid_stream)
             valid_err = float(valid_errs.mean())
-            res = worker.send_req(dict(valid_err=valid_err))
+            res = worker.send_req({'valid_err': valid_err})
             log.log({'validation_cost': valid_err,
                      'train_time': time.clock() - train_start})
 
@@ -208,5 +203,5 @@ if __name__ == "__main__":
     worker = Worker(control_port=5567)
     LOGGER.info('Retrieving configuration')
     config = worker.send_req('config')
-    train(config['model'], config['data'],
+    train(worker, config['model'], config['data'],
           **merge(config['training'], config['management'], config['multi']))
