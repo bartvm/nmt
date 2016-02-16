@@ -4,6 +4,16 @@ Repository to collect code for neural machine translation internally at MILA. Th
 
 To have a central collection of research ideas and discussions, please create issues and comment on them.
 
+## Training on the lab computers
+
+To train efficiently, make sure of the following:
+
+* Use cuDNN 4; if cuDNN is disabled it will take the gradient of the softmax on the CPU which is much slower. Note that cuDNN 4 seems to be missing from some computers (such as the Keplers) so either copy cuDNN 4 to those computers manually or use cuDNN 3 (shouldn't be much slower).
+    * To use it manually, simply rsync `/Tmp/lisa/os_v5/cudnn_v4` from a computer that has it to `/Tmp/$USER/cudnn_v4` on the computer where you need it. Then add this directory to your `LD_LIBRARY_PATH`, `LIBRARY_PATH` and `CPATH` paths.
+* Enable CNMeM (e.g. add `cnmem = 0.98` in the `[lib]` section of your `.theanorc`).
+
+Launching with Platoon can be done using `platoon-launcher nmt gpu0 gpu1 -c config.json`. Starting a single GPU experiment is done with `python nmt_singly.py config.json`.
+
 ## WMT16 data
 
 A quick overview on downloading and preparing the [WMT16
