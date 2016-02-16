@@ -11,7 +11,9 @@ To train efficiently, make sure of the following:
 * Use cuDNN 4; if cuDNN is disabled it will take the gradient of the softmax on the CPU which is much slower.
 * Enable CNMeM (e.g. add `cnmem = 0.98` in the `[lib]` section of your `.theanorc`).
 
-Launching with Platoon can be done using `platoon-launcher nmt gpu0 gpu1 -c config.json`. Starting a single GPU experiment is done with `python nmt_singly.py config.json`.
+Launching with Platoon can be done using `platoon-launcher nmt gpu0 gpu1 -c config.json`. To watch the logs it's wortwhile to alias the command `watch tail "$(ls -1dt PLATOON_LOGS/nmt/*/ | head -n 1)*"`.
+
+Starting a single GPU experiment is done with `python nmt_singly.py config.json`.
 
 ## WMT16 data
 
