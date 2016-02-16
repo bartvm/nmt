@@ -1,8 +1,17 @@
 from __future__ import print_function
-import numpy
-import time
+import binascii
+import io
+import json
+import os
+import shutil
+import sys
+from multiprocessing import Process
 
+import numpy
+from mimir import ServerLogger
 from platoon.channel import Controller
+
+from nmt_base import load_data
 
 
 class NMTController(Controller):
@@ -10,33 +19,47 @@ class NMTController(Controller):
     This multi-process controller implements patience-based early-stopping SGD
     """
 
-    def __init__(self, control_port, max_mb, patience, validFreq):
+    def __init__(self, experiment_id, config):
         """
         Initialize the NMTController
 
         Parameters
         ----------
-        max_mb : int
-            Max number of minibatches to train on.
-        patience: : int
-            Training stops when this many minibatches have been trained on
-            without any reported improvement.
-        validFreq : int
-            Number of minibatches to train on between every monitoring step.
+        experiment_id : str
+            A string that uniquely identifies this run.
+        config : dict
+            The deserialized JSON configuration file
+
         """
+        self.config = config
+        super(NMTController, self).__init__(config['multi']['control_port'])
+        self.batch_port = config['multi']['batch_port']
+        self.patience = config['training']['patience']
+        self.max_mb = config['training']['finish_after']
 
-        Controller.__init__(self, control_port)
-        self.patience = patience
-        self.max_mb = int(max_mb)
-
-        self.validFreq = validFreq
+        self.valid_freq = config['management']['valid_freq']
         self.uidx = 0
-        self.eidx = 0
-        self.history_errs = []
         self.bad_counter = 0
+        self.min_valid_cost = numpy.inf
 
         self.valid = False
-        self.start_time = None
+
+        self.experiment_id = experiment_id
+        ServerLogger(filename='{}.log.jsonl.gz'.format(self.experiment_id),
+                     threaded=True)
+
+    def start_batch_server(self):
+        self.p = Process(target=self._send_mb)
+        self.p.daemon = True
+        self.p.start()
+
+    def _send_mb(self):
+        self.init_data(self.batch_port)
+        _, train_stream, _ = load_data(**self.config['data'])
+
+        while True:
+            for x, x_mask, y, y_mask in train_stream.get_epoch_iterator():
+                self.send_mb([x.T, x_mask.T, y.T, y_mask.T])
 
     def handle_control(self, req, worker_id):
         """
@@ -65,10 +88,11 @@ class NMTController(Controller):
         """
         control_response = ""
 
-        if req == 'next':
-            if self.start_time is None:
-                self.start_time = time.time()
-
+        if req == 'config':
+            control_response = self.config
+        elif req == 'experiment_id':
+            control_response = self.experiment_id
+        elif req == 'next':
             if self.valid:
                 self.valid = False
                 control_response = 'valid'
@@ -77,44 +101,33 @@ class NMTController(Controller):
         elif 'done' in req:
             self.uidx += req['done']
 
-            if numpy.mod(self.uidx, self.validFreq) == 0:
+            if numpy.mod(self.uidx, self.valid_freq) == 0:
                 self.valid = True
         elif 'valid_err' in req:
             valid_err = req['valid_err']
-            test_err = req['test_err']
-            self.history_errs.append([valid_err, test_err])
-            harr = numpy.array(self.history_errs)[:, 0]
 
-            if valid_err <= harr.min():
+            if valid_err <= self.min_valid_cost:
                 self.bad_counter = 0
+                self.min_valid_cost = valid_err
                 control_response = 'best'
-                print("Best error valid:", valid_err, "test:", test_err)
-            elif (len(self.history_errs) > self.patience and
-                    valid_err >= harr[:-self.patience].min()):
+            else:
                 self.bad_counter += 1
 
         if self.uidx > self.max_mb or self.bad_counter > self.patience:
             control_response = 'stop'
             self.worker_is_done(worker_id)
-            print("Training time {:.4f}s".format(time.time() -
-                                                 self.start_time))
-            print("Number of samples:", self.uidx)
 
         return control_response
 
 
-def nmt_control(patience=10,
-                max_epochs=5000,
-                validFreq=1000,
-                saveFreq=1000,
-                saveto=None):
-
-    # TODO: have a better way to set max_mb
-    l = NMTController(control_port=5567, max_mb=(5000 * 1998) / 10,
-                      patience=patience, validFreq=validFreq)
-
-    print("Controller is ready")
-    l.serve()
-
 if __name__ == '__main__':
-    nmt_control()
+    # Load the configuration file
+    with io.open(sys.argv[1]) as f:
+        config = json.load(f)
+    # Create unique experiment ID and backup config file
+    experiment_id = binascii.hexlify(os.urandom(3)).decode()
+    shutil.copyfile(sys.argv[1], '{}.config.json'.format(experiment_id))
+    # Start controller
+    l = NMTController(experiment_id, config)
+    l.start_batch_server()
+    l.serve()

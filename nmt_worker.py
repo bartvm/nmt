@@ -1,30 +1,33 @@
 from __future__ import print_function
 
 import copy
+import logging
 import os
-import sys
+import time
 
 import numpy
 import six
 import theano
-import yaml
+from mimir import RemoteLogger
 from platoon.channel import Worker
 from platoon.param_sync import EASGD
-from six.moves import xrange, cPickle
+from six.moves import xrange
 from theano import tensor
 from toolz.dicttoolz import merge
 
 import optimizers
-from nmt_base import (init_params, build_model, build_sampler,
+from nmt_base import (init_params, build_model, build_sampler, save_params,
                       pred_probs, load_data)
 from utils import unzip, init_tparams, load_params, itemlist
 
+logging.basicConfig(level=logging.INFO)
+LOGGER = logging.getLogger(__name__)
 
-def train(model_options, data_options,
+
+def train(worker, model_options, data_options,
           patience,  # early stopping patience
           max_epochs,
           finish_after,  # finish after this many updates
-          disp_freq,
           decay_c,  # L2 regularization penalty
           alpha_c,  # alignment regularization
           clip_c,  # gradient clipping threshold
@@ -36,26 +39,27 @@ def train(model_options, data_options,
           valid_sync,
           save_freq,   # save the parameters after every saveFreq updates
           sample_freq,   # generate some samples after every sampleFreq
-          reload_=False):
+          control_port,
+          batch_port,
+          reload_):
 
-    worker = Worker(control_port=5567)
+    LOGGER.info('Connecting to data socket and loading validation data')
+    worker.init_mb_sock(batch_port)
+    _, _, valid_stream = load_data(**data_options)
 
-    # reload options
-    if reload_ and os.path.exists(saveto):
-        with open('%s.pkl' % saveto, 'rb') as f:
-            model_options = cPickle.load(f, encoding='latin1')
-
-    worddicts_r, train_stream, valid_stream = load_data(**data_options)
-
-    print('Building model')
+    LOGGER.info('Building model')
     params = init_params(model_options)
     # reload parameters
-    if reload_ and os.path.exists(saveto):
-        params = load_params(saveto, params)
+    experiment_id = worker.send_req('experiment_id')
+    model_filename = '{}.model.npz'.format(experiment_id)
+    saveto_filename = '{}.npz'.format(saveto)
+    if reload_ and os.path.exists(saveto_filename):
+        LOGGER.info('Loading parameters from {}'.format(saveto_filename))
+        params = load_params(saveto_filename, params)
 
+    LOGGER.info('Initializing parameters')
     tparams = init_tparams(params)
     worker.init_shared_params(tparams.values(), param_sync_rule=EASGD(0.5))
-    print('Params init done')
 
     # use_noise is for dropout
     trng, use_noise, \
@@ -65,13 +69,12 @@ def train(model_options, data_options,
         build_model(tparams, model_options)
     inps = [x, x_mask, y, y_mask]
 
-    print('Buliding sampler')
+    LOGGER.info('Building sampler')
     f_init, f_next = build_sampler(tparams, model_options, trng)
 
     # before any regularizer
-    print('Building f_log_probs...', end=' ')
+    LOGGER.info('Building f_log_probs')
     f_log_probs = theano.function(inps, cost, profile=False)
-    print('Done')
 
     cost = cost.mean()
 
@@ -94,13 +97,11 @@ def train(model_options, data_options,
 
     # Not used?
     # after all regularizers - compile the computational graph for cost
-    # print('Building f_cost...', end=' ')
+    # LOGGER.info('Building f_cost')
     # f_cost = theano.function(inps, cost, profile=False)
-    # print('Done')
 
-    print('Computing gradient...', end=' ')
+    LOGGER.info('Computing gradient')
     grads = tensor.grad(cost, wrt=itemlist(tparams))
-    print('Done')
 
     # apply gradient clipping here
     if clip_c > 0.:
@@ -115,59 +116,62 @@ def train(model_options, data_options,
 
     # compile the optimizer, the actual computational graph is compiled here
     lr = tensor.scalar(name='lr')
-    print('Building optimizers...', end=' ')
+    LOGGER.info('Building optimizers')
     f_grad_shared, f_update = getattr(optimizers, optimizer)(lr, tparams,
                                                              grads, inps, cost)
-    print('Done')
 
-    print('Optimization')
+    LOGGER.info('Optimization')
+
+    log = RemoteLogger()
+    train_start = time.clock()
     best_p = None
-
-    # Training data iterator!
-    def train_iter():
-        while True:
-            for x, x_mask, y, y_mask in train_stream.get_epoch_iterator():
-                yield x.T, x_mask.T, y.T, y_mask.T
-
-    train_it = train_iter()
 
     # Making sure that the worker start training with the most recent params
     worker.copy_to_local()
 
+    uidx = 0
     while True:
         step = worker.send_req('next')
-        print(step)
+        LOGGER.info('Received command: {}'.format(step))
         if step == 'train':
             use_noise.set_value(1.)
             for i in xrange(train_len):
-                x, x_mask, y, y_mask = next(train_it)
+                x, x_mask, y, y_mask = worker.recv_mb()
 
+                uidx += 1
+                log_entry = {'iteration': uidx}
+
+                # compute cost, grads and copy grads to shared variables
+                update_start = time.clock()
                 cost = f_grad_shared(x, x_mask, y, y_mask)
-
                 f_update(lrate)
 
-            print('Train cost:', cost)
+                log_entry['cost'] = float(cost)
+                log_entry['average_source_length'] = \
+                    float(x_mask.sum(0).mean())
+                log_entry['average_target_length'] = \
+                    float(y_mask.sum(0).mean())
+                log_entry['update_time'] = time.clock() - update_start
+                log_entry['train_time'] = time.clock() - train_start
+                log.log(log_entry)
 
-            step = worker.send_req(dict(done=train_len))
-            print("Syncing with global params")
+            step = worker.send_req({'done': train_len})
+            LOGGER.info("Syncing with global params")
             worker.sync_params(synchronous=True)
 
         if step == 'valid':
             if valid_sync:
                 worker.copy_to_local()
             use_noise.set_value(0.)
-            valid_errs = pred_probs(f_log_probs,
-                                    model_options,
-                                    valid_stream)
-            valid_err = valid_errs.mean()
-            res = worker.send_req(dict(test_err=float(valid_err),
-                                       valid_err=float(valid_err)))
+            valid_errs = pred_probs(f_log_probs, model_options, valid_stream)
+            valid_err = float(valid_errs.mean())
+            res = worker.send_req({'valid_err': valid_err})
+            log.log({'validation_cost': valid_err,
+                     'train_time': time.clock() - train_start})
 
             if res == 'best':
                 best_p = unzip(tparams)
 
-            print(('Valid ', valid_err,
-                   'Test ', valid_err))
             if valid_sync:
                 worker.copy_to_local()
 
@@ -177,7 +181,7 @@ def train(model_options, data_options,
     # Release all shared ressources.
     worker.close()
 
-    print('Saving...')
+    LOGGER.info('Saving')
 
     if best_p is not None:
         params = best_p
@@ -188,14 +192,16 @@ def train(model_options, data_options,
 
     if saveto:
         numpy.savez(saveto, **best_p)
-        print('model saved')
+        LOGGER.info('model saved')
 
     params = copy.copy(best_p)
-    numpy.savez(saveto, zipped_params=best_p, **params)
+    save_params(params, model_filename, saveto_filename)
 
 
 if __name__ == "__main__":
-    with open(sys.argv[1]) as f:
-        config = yaml.load(f)
-    train(config['model'], config['data'],
+    LOGGER.info('Connecting to worker')
+    worker = Worker(control_port=5567)
+    LOGGER.info('Retrieving configuration')
+    config = worker.send_req('config')
+    train(worker, config['model'], config['data'],
           **merge(config['training'], config['management'], config['multi']))

@@ -1,0 +1,47 @@
+{
+  "training": {
+    "optimizer": "adadelta",
+    "alpha_c": 0,
+    "clip_c": 1,
+    "decay_c": 0,
+    "patience": 10,
+    "finish_after": 10000000,
+    "lrate": 0.0001,
+    "max_epochs": 5000
+  },
+  "multi": {
+    "valid_sync": true,
+    "train_len": 32,
+    "control_port": 5567,
+    "batch_port": 5568
+  },
+  "management": {
+    "sample_freq": 1000,
+    "valid_freq": 5000,
+    "saveto": "model",
+    "reload_": true,
+    "save_freq": 5000
+  },
+  "data": {
+    "src": "/data/lisatmp4/vanmerb/wmt16/wmt16.de-en.tok.true.clean.shuf.en",
+    "src_vocab": "/data/lisatmp4/vanmerb/wmt16/wmt16.de-en.vocab.en",
+    "trg": "/data/lisatmp4/vanmerb/wmt16/wmt16.de-en.tok.true.clean.shuf.de",
+    "valid_src": "/data/lisatmp4/vanmerb/wmt16/dev/newstest2013.tok.true.en",
+    "trg_vocab": "/data/lisatmp4/vanmerb/wmt16/wmt16.de-en.vocab.de",
+    "batch_size": 64,
+    "n_words": 30000,
+    "valid_batch_size": 64,
+    "n_words_src": 30000,
+    "valid_trg": "/data/lisatmp4/vanmerb/wmt16/dev/newstest2013.tok.true.de"
+  },
+  "model": {
+    "dim": 1024,
+    "use_dropout": false,
+    "dim_word_src": 512,
+    "decoder": "gru_cond",
+    "encoder": "gru",
+    "n_words_src": 30000,
+    "n_words": 30000,
+    "dim_word_trg": 512
+  }
+}

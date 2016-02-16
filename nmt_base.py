@@ -1,23 +1,24 @@
 '''
 Build a neural machine translation model with soft attention
 '''
-from __future__ import print_function
+import copy
+import logging
+import os
+from collections import OrderedDict
+
+import numpy
+import six
 import theano
+from six.moves import xrange
 from theano import tensor
 from theano.sandbox.rng_mrg import MRG_RandomStreams
 
-import six
-from six.moves import xrange
-import ipdb
-import numpy
-import copy
-
-import sys
-
-from collections import OrderedDict
 from utils import dropout_layer, norm_weight, concatenate
 from layers import get_layer
 from data_iterator import get_stream, load_dict
+
+logging.basicConfig(level=logging.INFO)
+LOGGER = logging.getLogger(__name__)
 
 
 def load_data(src, trg,
@@ -25,7 +26,7 @@ def load_data(src, trg,
               src_vocab, trg_vocab,
               n_words, n_words_src,
               batch_size, valid_batch_size):
-    print('Loading data')
+    LOGGER.info('Loading data')
 
     dictionaries = [src_vocab, trg_vocab]
     datasets = [src, trg]
@@ -278,10 +279,9 @@ def build_sampler(tparams, options, trng):
                                     prefix='ff_state',
                                     activ=tensor.tanh)
 
-    print('Building f_init...', end=' ')
+    LOGGER.info('Building f_init')
     outs = [init_state, ctx]
     f_init = theano.function([x], outs, name='f_init', profile=False)
-    print('Done')
 
     # x: 1 x 1
     y = tensor.vector('y_sampler', dtype='int64')
@@ -337,11 +337,10 @@ def build_sampler(tparams, options, trng):
 
     # compile a function to do the whole thing above, next word probability,
     # sampled word for the next target, next hidden state to be used
-    print('Building f_next..', end=' ')
+    LOGGER.info('Building f_next')
     inps = [y, ctx, init_state]
     outs = [next_probs, next_sample, next_state]
     f_next = theano.function(inps, outs, name='f_next', profile=False)
-    print('Done')
 
     return f_init, f_next
 
@@ -453,7 +452,7 @@ def gen_sample(tparams,
 
 
 # calculate the log probablities on a given corpus using translation model
-def pred_probs(f_log_probs, options, stream, verbose=True):
+def pred_probs(f_log_probs, options, stream):
     probs = []
 
     n_done = 0
@@ -467,10 +466,21 @@ def pred_probs(f_log_probs, options, stream, verbose=True):
         for pp in pprobs:
             probs.append(pp)
 
-        if numpy.isnan(numpy.mean(probs)):
-            ipdb.set_trace()
-
-        if verbose:
-            print('%d samples computed' % (n_done), file=sys.stderr)
+        if not numpy.isfinite(numpy.mean(probs)):
+            raise RuntimeError('non-finite probabilities')
 
     return numpy.array(probs)
+
+
+def save_params(params, filename, symlink=None):
+    """Save the parameters.
+
+    Saves the parameters as an ``.npz`` file. It optionally also creates a
+    symlink to this archive.
+
+    """
+    numpy.savez(filename, **params)
+    if symlink:
+        if os.path.lexists(symlink):
+            os.remove(symlink)
+        os.symlink(filename, symlink)
