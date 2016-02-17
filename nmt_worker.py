@@ -70,6 +70,7 @@ def train(worker, model_options, data_options,
     inps = [x, x_mask, y, y_mask]
 
     LOGGER.info('Building sampler')
+    worker.start_compilation()
     f_init, f_next = build_sampler(tparams, model_options, trng)
 
     # before any regularizer
@@ -119,6 +120,7 @@ def train(worker, model_options, data_options,
     LOGGER.info('Building optimizers')
     f_grad_shared, f_update = getattr(optimizers, optimizer)(lr, tparams,
                                                              grads, inps, cost)
+    worker.finish_compilation()
 
     LOGGER.info('Optimization')
 

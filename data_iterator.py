@@ -4,7 +4,8 @@ from itertools import count
 from fuel.datasets.text import TextFile
 from fuel.transformers import Merge
 from fuel.schemes import ConstantScheme
-from fuel.transformers import Batch, Cache, Mapping, SortMapping, Padding
+from fuel.transformers import (Batch, Cache, Mapping, SortMapping, Padding,
+                               Filter)
 
 
 EOS_TOKEN = '<EOS>'  # 0
@@ -33,8 +34,9 @@ def load_dict(filename, n_words=0):
     return dict_
 
 
-def get_stream(source, target, source_dict, target_dict, batch_size=128,
-               buffer_multiplier=100, n_words_source=0, n_words_target=0):
+def get_stream(source, target, source_dict, target_dict, batch_size,
+               buffer_multiplier=100, n_words_source=0, n_words_target=0,
+               max_src_length=None, max_trg_length=None):
     """Returns a stream over sentence pairs.
 
     Parameters
@@ -76,6 +78,15 @@ def get_stream(source, target, source_dict, target_dict, batch_size=128,
                  eos_token=EOS_TOKEN).get_example_stream()
     ]
     merged = Merge(streams, ('source', 'target'))
+
+    # Filter sentence lengths
+    if max_src_length or max_trg_length:
+        def filter_pair(pair):
+            src, trg = pair
+            src_ok = (not max_src_length) or len(src) < max_src_length
+            trg_ok = (not max_trg_length) or len(trg) < max_trg_length
+            return src_ok and trg_ok
+        merged = Filter(merged, filter_pair)
 
     # Batches of approximately uniform size
     large_batches = Batch(

@@ -23,16 +23,18 @@
     "save_freq": 5000
   },
   "data": {
-    "src": "/data/lisatmp4/vanmerb/wmt16/wmt16.de-en.tok.true.clean.shuf.en",
-    "src_vocab": "/data/lisatmp4/vanmerb/wmt16/wmt16.de-en.vocab.en",
-    "trg": "/data/lisatmp4/vanmerb/wmt16/wmt16.de-en.tok.true.clean.shuf.de",
-    "valid_src": "/data/lisatmp4/vanmerb/wmt16/dev/newstest2013.tok.true.en",
-    "trg_vocab": "/data/lisatmp4/vanmerb/wmt16/wmt16.de-en.vocab.de",
+    "src": "train/wmt16.de-en.tok.true.clean.shuf.en",
+    "src_vocab": "train/wmt16.de-en.vocab.en",
+    "trg": "train/wmt16.de-en.tok.true.clean.shuf.de",
+    "valid_src": "dev/newstest2013.tok.true.en",
+    "trg_vocab": "train/wmt16.de-en.vocab.de",
     "batch_size": 64,
     "n_words": 30000,
     "valid_batch_size": 64,
     "n_words_src": 30000,
-    "valid_trg": "/data/lisatmp4/vanmerb/wmt16/dev/newstest2013.tok.true.de"
+    "valid_trg": "dev/newstest2013.tok.true.de",
+    "max_src_length": 50,
+    "max_trg_length": 50
   },
   "model": {
     "dim": 1024,
