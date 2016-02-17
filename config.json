@@ -13,7 +13,8 @@
     "valid_sync": true,
     "train_len": 32,
     "control_port": 5567,
-    "batch_port": 5568
+    "batch_port": 5568,
+    "beta": 0.9
   },
   "management": {
     "sample_freq": 1000,

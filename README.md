@@ -1,19 +1,31 @@
 # Neural machine translation
 
-Repository to collect code for neural machine translation internally at MILA. The short-term objective is to have an attention-based model working on multiple GPUs (see [#6](https://github.com/bartvm/nmt/issues/6)). My proposal is to base the model code of Cho's for now (see [#1](https://github.com/bartvm/nmt/issues/1), because it has simpler internals than Blocks that we can hack away at if needed for multi-GPU.
+Repository to collect code for neural machine translation internally at MILA.
+The short-term objective is to have an attention-based model working on
+multiple GPUs (see [#6](https://github.com/bartvm/nmt/issues/6)). My proposal
+is to base the model code of Cho's for now (see
+[#1](https://github.com/bartvm/nmt/issues/1), because it has simpler internals
+than Blocks that we can hack away at if needed for multi-GPU.
 
-To have a central collection of research ideas and discussions, please create issues and comment on them.
+To have a central collection of research ideas and discussions, please create
+issues and comment on them.
 
 ## Training on the lab computers
 
 To train efficiently, make sure of the following:
 
-* Use cuDNN 4; if cuDNN is disabled it will take the gradient of the softmax on the CPU which is much slower.
-* Enable CNMeM (e.g. add `cnmem = 0.98` in the `[lib]` section of your `.theanorc`).
+* Use cuDNN 4; if cuDNN is disabled it will take the gradient of the
+  softmax on the CPU which is much slower.
+* Enable CNMeM (e.g. add `cnmem = 0.98` in the `[lib]` section of your
+  `.theanorc`).
 
-Launching with Platoon can be done using `platoon-launcher nmt gpu0 gpu1 -c config.json`. To watch the logs it's wortwhile to alias the command `watch tail "$(ls -1dt PLATOON_LOGS/nmt/*/ | head -n 1)*"`.
+Launching with Platoon can be done using `platoon-launcher nmt gpu0 gpu1
+-c="config.json 4"` where 4 is the number of workers.. To watch the logs
+it's wortwhile to alias the command `watch tail "$(ls -1dt
+PLATOON_LOGS/nmt/*/ | head -n 1)*"`.
 
-Starting a single GPU experiment is done with `python nmt_singly.py config.json`.
+Starting a single GPU experiment is done with `python nmt_single.py
+config.json`.
 
 ## WMT16 data
 
