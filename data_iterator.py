@@ -1,13 +1,45 @@
 from itertools import count
 
+import numpy
+
 from fuel.datasets.text import TextFile
 from fuel.transformers import Merge
 from fuel.schemes import ConstantScheme
-from fuel.transformers import Batch, Cache, Mapping, SortMapping, Padding
+from fuel.transformers import (Batch, Cache, Mapping, SortMapping, Padding,
+                               Transformer)
 
 
 EOS_TOKEN = '<EOS>'  # 0
 UNK_TOKEN = '<UNK>'  # 1
+
+
+class Shuffle(Transformer):
+    def __init__(self, data_stream, buffer_size, **kwargs):
+        if kwargs.get('iteration_scheme') is not None:
+            raise ValueError
+        super(Shuffle, self).__init__(
+                data_stream, produces_examples=data_stream.produces_examples,
+                **kwargs)
+        self.buffer_size = buffer_size
+        self.cache = [[] for _ in self.sources]
+
+    def get_data(self, request=None):
+        if request is not None:
+            raise ValueError
+        if not self.cache[0]:
+            self._cache()
+        return tuple(cache.pop() for cache in self.cache)
+
+    def _cache(self):
+        temp_caches = [[] for _ in self.sources]
+        for i in range(self.buffer_size):
+            for temp_cache, data in zip(temp_caches,
+                                        next(self.child_epoch_iterator)):
+                temp_cache.append(data)
+        shuffled_indices = numpy.random.permutation(self.buffer_size)
+        for i in shuffled_indices:
+            for temp_cache, cache in zip(temp_caches, self.cache):
+                cache.append(temp_cache[i])
 
 
 def _source_length(sentence_pair):
@@ -83,6 +115,7 @@ def get_stream(source, target, source_dict, target_dict, batch_size=128,
     )
     sorted_batches = Mapping(large_batches, SortMapping(_source_length))
     batches = Cache(sorted_batches, ConstantScheme(batch_size))
-    masked_batches = Padding(batches)
+    shuffled_batches = Shuffle(batches, buffer_multiplier)
+    masked_batches = Padding(shuffled_batches)
 
     return masked_batches

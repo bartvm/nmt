@@ -59,7 +59,8 @@ def train(worker, model_options, data_options,
 
     LOGGER.info('Initializing parameters')
     tparams = init_tparams(params)
-    worker.init_shared_params(tparams.values(), param_sync_rule=EASGD(0.5))
+    alpha = worker.send_req('alpha')
+    worker.init_shared_params(tparams.values(), param_sync_rule=EASGD(alpha))
 
     # use_noise is for dropout
     trng, use_noise, \
@@ -153,6 +154,7 @@ def train(worker, model_options, data_options,
                     float(y_mask.sum(0).mean())
                 log_entry['update_time'] = time.clock() - update_start
                 log_entry['train_time'] = time.clock() - train_start
+                log_entry['time'] = time.time()
                 log.log(log_entry)
 
             step = worker.send_req({'done': train_len})
@@ -167,7 +169,8 @@ def train(worker, model_options, data_options,
             valid_err = float(valid_errs.mean())
             res = worker.send_req({'valid_err': valid_err})
             log.log({'validation_cost': valid_err,
-                     'train_time': time.clock() - train_start})
+                     'train_time': time.clock() - train_start,
+                     'time': time.time()})
 
             if res == 'best':
                 best_p = unzip(tparams)
