@@ -4,6 +4,7 @@ import io
 import json
 import os
 import shutil
+import signal
 import sys
 from multiprocessing import Process
 
@@ -47,12 +48,22 @@ class NMTController(Controller):
         self.min_valid_cost = numpy.inf
 
         self.valid = False
+        self._stop = False
+
+        signal.signal(signal.SIGTERM, self.stop)
+        signal.signal(signal.SIGINT, self.stop)
 
         self.experiment_id = experiment_id
         ServerLogger(filename='{}.log.jsonl.gz'.format(self.experiment_id),
                      threaded=True)
 
         self.num_workers = num_workers
+
+    def stop(self, signum, frame):
+        print('Received SIGINT/SIGTERM')
+        self._stop = True
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
 
     def start_batch_server(self):
         self.p = Process(target=self._send_mb)
@@ -122,7 +133,8 @@ class NMTController(Controller):
             else:
                 self.bad_counter += 1
 
-        if self.uidx > self.max_mb or self.bad_counter > self.patience:
+        if (self._stop or self.uidx > self.max_mb or
+                self.bad_counter > self.patience):
             control_response = 'stop'
             self.worker_is_done(worker_id)
 
