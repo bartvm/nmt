@@ -1,6 +1,5 @@
 from __future__ import print_function
 
-import copy
 import logging
 import os
 import time
@@ -172,8 +171,9 @@ def train(worker, model_options, data_options,
                      'train_time': time.clock() - train_start,
                      'time': time.time()})
 
-            if res == 'best':
+            if res == 'best' and saveto:
                 best_p = unzip(tparams)
+                save_params(best_p, model_filename, saveto_filename)
 
             if valid_sync:
                 worker.copy_to_local()
@@ -183,22 +183,6 @@ def train(worker, model_options, data_options,
 
     # Release all shared ressources.
     worker.close()
-
-    LOGGER.info('Saving')
-
-    if best_p is not None:
-        params = best_p
-    else:
-        params = unzip(tparams)
-
-    use_noise.set_value(0.)
-
-    if saveto:
-        numpy.savez(saveto, **best_p)
-        LOGGER.info('model saved')
-
-    params = copy.copy(best_p)
-    save_params(params, model_filename, saveto_filename)
 
 
 if __name__ == "__main__":
