@@ -1,3 +1,4 @@
+import io
 from itertools import count
 
 from fuel.datasets.text import TextFile
@@ -23,7 +24,7 @@ def _source_length(sentence_pair):
 def load_dict(filename, n_words=0):
     """Load vocab from TSV with words in last column."""
     dict_ = {EOS_TOKEN: 0, UNK_TOKEN: 1}
-    with open(filename) as f:
+    with io.open(filename) as f:
         if n_words > 0:
             indices = range(len(dict_), n_words)
         else:
