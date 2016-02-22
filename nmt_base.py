@@ -17,7 +17,6 @@ from utils import dropout_layer, norm_weight, concatenate
 from layers import get_layer
 from data_iterator import get_stream, load_dict
 
-logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger(__name__)
 
 

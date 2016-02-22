@@ -2,6 +2,7 @@ from __future__ import print_function
 import binascii
 import io
 import json
+import logging
 import os
 import shutil
 import signal
@@ -13,6 +14,10 @@ from mimir import ServerLogger
 from platoon.channel import Controller
 
 from nmt_base import load_data
+
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s:%(levelname)s:%(name)s:%(message)s')
+LOGGER = logging.getLogger(__name__)
 
 
 class NMTController(Controller):
@@ -37,8 +42,9 @@ class NMTController(Controller):
         """
         self.beta = config['multi'].pop('beta')
         self.config = config
+        LOGGER.info('Setting up controller ({})'
+                    .format(config['multi']['control_port']))
         super(NMTController, self).__init__(config['multi']['control_port'])
-        self.batch_port = config['multi']['batch_port']
         self.patience = config['training']['patience']
         self.max_mb = config['training']['finish_after']
 
@@ -55,28 +61,36 @@ class NMTController(Controller):
 
         self.experiment_id = experiment_id
         ServerLogger(filename='{}.log.jsonl.gz'.format(self.experiment_id),
-                     threaded=True)
+                     threaded=True, port=config['multi']['log_port'])
 
         self.num_workers = num_workers
 
     def stop(self, signum, frame):
-        print('Received SIGINT/SIGTERM')
+        print('Received signal {}'.format(signum))
         self._stop = True
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
         signal.signal(signal.SIGINT, signal.SIG_DFL)
 
     def start_batch_server(self):
-        self.p = Process(target=self._send_mb)
+        self.p = Process(target=self._send_mb,
+                         args=(self.config['multi']['batch_port'],))
         self.p.daemon = True
         self.p.start()
 
-    def _send_mb(self):
-        self.init_data(self.batch_port)
+    def _send_mb(self, batch_port):
+        LOGGER.info('Loading training data stream')
         _, train_stream, _ = load_data(**self.config['data'])
 
+        LOGGER.info('Connecting to socket ({})'
+                    .format(batch_port))
+        self.init_data(batch_port)
+
         while True:
+            LOGGER.info('Start new epoch sending batches')
             for x, x_mask, y, y_mask in train_stream.get_epoch_iterator():
+                LOGGER.debug('Sending batch')
                 self.send_mb([x.T, x_mask.T, y.T, y_mask.T])
+                LOGGER.debug('Sent batch')
 
     def handle_control(self, req, worker_id):
         """

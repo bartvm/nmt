@@ -2,6 +2,7 @@ from __future__ import print_function
 
 import logging
 import os
+import sys
 import time
 
 import numpy
@@ -19,7 +20,8 @@ from nmt_base import (init_params, build_model, build_sampler, save_params,
                       pred_probs, load_data)
 from utils import unzip, init_tparams, load_params, itemlist
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s:%(levelname)s:%(name)s:%(message)s')
 LOGGER = logging.getLogger(__name__)
 
 
@@ -40,9 +42,11 @@ def train(worker, model_options, data_options,
           sample_freq,   # generate some samples after every sampleFreq
           control_port,
           batch_port,
+          log_port,
           reload_):
 
-    LOGGER.info('Connecting to data socket and loading validation data')
+    LOGGER.info('Connecting to data socket ({}) and loading validation data'
+                .format(batch_port))
     worker.init_mb_sock(batch_port)
     _, _, valid_stream = load_data(**data_options)
 
@@ -120,11 +124,10 @@ def train(worker, model_options, data_options,
     LOGGER.info('Building optimizers')
     f_grad_shared, f_update = getattr(optimizers, optimizer)(lr, tparams,
                                                              grads, inps, cost)
-    worker.finish_compilation()
 
     LOGGER.info('Optimization')
 
-    log = RemoteLogger()
+    log = RemoteLogger(port=log_port)
     train_start = time.clock()
     best_p = None
 
@@ -134,7 +137,7 @@ def train(worker, model_options, data_options,
     uidx = 0
     while True:
         step = worker.send_req('next')
-        LOGGER.info('Received command: {}'.format(step))
+        LOGGER.debug('Received command: {}'.format(step))
         if step == 'train':
             use_noise.set_value(1.)
             for i in xrange(train_len):
@@ -159,7 +162,7 @@ def train(worker, model_options, data_options,
                 log.log(log_entry)
 
             step = worker.send_req({'done': train_len})
-            LOGGER.info("Syncing with global params")
+            LOGGER.debug("Syncing with global params")
             worker.sync_params(synchronous=True)
 
         if step == 'valid':
@@ -188,8 +191,8 @@ def train(worker, model_options, data_options,
 
 
 if __name__ == "__main__":
-    LOGGER.info('Connecting to worker')
-    worker = Worker(control_port=5567)
+    LOGGER.info('Connecting to worker ({})'.format(sys.argv[1]))
+    worker = Worker(int(sys.argv[1]))
     LOGGER.info('Retrieving configuration')
     config = worker.send_req('config')
     train(worker, config['model'], config['data'],
