@@ -6,12 +6,17 @@ import theano
 from theano import tensor
 from theano.sandbox.rng_mrg import MRG_RandomStreams
 
+import six
+
 from six.moves import cPickle
 from six.moves import xrange
 
 import ipdb
 import numpy
 import copy
+import logging
+import os
+from collections import OrderedDict
 
 import os
 import sys
@@ -23,7 +28,54 @@ import settings
 from layers import get_layer
 from utils import (dropout_layer, norm_weight, get_ctx_matrix,
 		   concatenate)
+
 profile = settings.profile
+from data_iterator import get_stream, load_dict
+
+
+logging.basicConfig(level=logging.INFO)
+LOGGER = logging.getLogger(__name__)
+
+
+
+def load_data(src, trg,
+              valid_src, valid_trg,
+              src_vocab, trg_vocab,
+              n_words, n_words_src,
+              batch_size, valid_batch_size,
+              max_src_length, max_trg_length):
+    LOGGER.info('Loading data')
+    dictionaries = [src_vocab, trg_vocab]
+    datasets = [src, trg]
+    valid_datasets = [valid_src, valid_trg]
+
+    # load dictionaries and invert them
+    worddicts = [None] * len(dictionaries)
+    worddicts_r = [None] * len(dictionaries)
+    for ii, dd in enumerate(dictionaries):
+        worddicts[ii] = load_dict(dd)
+        worddicts_r[ii] = dict()
+        for kk, vv in six.iteritems(worddicts[ii]):
+            worddicts_r[ii][vv] = kk
+
+    train_stream = get_stream([datasets[0]],
+                              [datasets[1]],
+                              dictionaries[0],
+                              dictionaries[1],
+                              n_words_source=n_words_src,
+                              n_words_target=n_words,
+                              batch_size=batch_size,
+                              max_src_length=max_src_length,
+                              max_trg_length=max_trg_length)
+    valid_stream = get_stream([valid_datasets[0]],
+                              [valid_datasets[1]],
+                              dictionaries[0],
+                              dictionaries[1],
+                              n_words_source=n_words_src,
+                              n_words_target=n_words,
+                              batch_size=valid_batch_size)
+
+    return worddicts_r, train_stream, valid_stream
 
 def prepare_data(seqs_x, seqs_y, maxlen=None):
     lengths_x = [len(s) for s in seqs_x]
@@ -43,9 +95,9 @@ def prepare_data(seqs_x, seqs_y, maxlen=None):
         seqs_x = new_seqs_x
         lengths_y = new_lengths_y
         seqs_y = new_seqs_y
-	
+
         if len(lengths_x) < 1 or len(lengths_y) < 1:
-            return None, None, None, None, None
+            return None, None, None, None
 
     n_samples = len(seqs_x)
     maxlen_x = numpy.max(lengths_x) + 1
@@ -55,13 +107,13 @@ def prepare_data(seqs_x, seqs_y, maxlen=None):
     y = numpy.zeros((maxlen_y, n_samples)).astype('int64')
     x_mask = numpy.zeros((maxlen_x, n_samples)).astype('float32')
     y_mask = numpy.zeros((maxlen_y, n_samples)).astype('float32')
-    
+
     for idx, [s_x, s_y] in enumerate(zip(seqs_x, seqs_y)):
         x[:lengths_x[idx], idx] = s_x
         x_mask[:lengths_x[idx]+1, idx] = 1.
         y[:lengths_y[idx], idx] = s_y
         y_mask[:lengths_y[idx]+1, idx] = 1.
-   
+
     return x, x_mask, y, y_mask
 
 # initialize all parameters
@@ -74,9 +126,9 @@ def init_params(options):
                                      options['dim_word_trg'])
 
 
-    # MLP for unknown words embedding! Takes 
+    # MLP for unknown words embedding! Takes
     # and outputs embedding for unknown words!
-    params = get_layer('ff')[0](options, 
+    params = get_layer('ff')[0](options,
                                 params,
                                 prefix='ff_embedding',
                                 nin=options['ctx_len_emb'] * options['dim_word_src'],
@@ -148,24 +200,24 @@ def build_model(tparams, options):
     y_mask = tensor.matrix('y_mask', dtype='float32')
 
     # description num_of_unk_words * context_size
-    unk_ctx = tensor.matrix('unk_ctx', dtype='int64') 
+    unk_ctx = tensor.matrix('unk_ctx', dtype='int64')
 
     #number of unknown words in a batch
     n_ctx = unk_ctx.shape[0]
     # get word embedding for the context
     unk_ctx_wrd_emb = tparams['Wemb'][unk_ctx.flatten()]
     # reshape the word embedding.
-    unk_ctx_wrd_emb = unk_ctx_wrd_emb.reshape([n_ctx, 
+    unk_ctx_wrd_emb = unk_ctx_wrd_emb.reshape([n_ctx,
                                                options['ctx_len_emb']*options['dim_word_src']])
-    # given the context embedding, 
-    # output the embeddings for 
+    # given the context embedding,
+    # output the embeddings for
     # unknown words.
-    unk_ctx_emb = get_layer('ff')[1](tparams, 
-                                     unk_ctx_wrd_emb, 
+    unk_ctx_emb = get_layer('ff')[1](tparams,
+                                     unk_ctx_wrd_emb,
                                      options,
-				     prefix='ff_embedding', 
+				     prefix='ff_embedding',
                                      activ='tanh')
-    
+
 
     # for the backward rnn, we just need to invert x and x_mask
     xr = x[::-1]
@@ -174,12 +226,12 @@ def build_model(tparams, options):
     n_timesteps_trg = y.shape[0]
     n_samples = x.shape[1]
 
-    # word embedding for forward rnn (source) 
-    x_temp = x.flatten();    
+    # word embedding for forward rnn (source)
+    x_temp = x.flatten();
     ones_vec = tensor.switch(tensor.eq(x_temp, 1), 1, 0)
     cum_sum = tensor.extra_ops.cumsum(ones_vec)
     cmb_x_vector = tensor.switch(tensor.eq(x_temp, 1), cum_sum + options['n_words_src'] - 1,  x_temp)
-    c_word_embedding = concatenate([tparams['Wemb'], unk_ctx_emb], axis=0) 
+    c_word_embedding = concatenate([tparams['Wemb'], unk_ctx_emb], axis=0)
     emb = c_word_embedding[cmb_x_vector[:]];
     emb = emb.reshape([n_timesteps, n_samples, options['dim_word_src']])
     proj = get_layer(options['encoder'])[1](tparams,
@@ -282,31 +334,31 @@ def build_model(tparams, options):
 # build a sampler
 def build_sampler(tparams, options, trng):
     x = tensor.matrix('x', dtype='int64')
-    unk_ctx = tensor.matrix('unk_ctx', dtype='int64') 
+    unk_ctx = tensor.matrix('unk_ctx', dtype='int64')
 
     xr = x[::-1]
     n_timesteps = x.shape[0]
     n_samples = x.shape[1]
-    n_ctx = unk_ctx.shape[0] 
+    n_ctx = unk_ctx.shape[0]
 
     unk_ctx_wrd_emb = tparams['Wemb'][unk_ctx.flatten()]
-    unk_ctx_wrd_emb = unk_ctx_wrd_emb.reshape([n_ctx, 
+    unk_ctx_wrd_emb = unk_ctx_wrd_emb.reshape([n_ctx,
                                                options['ctx_len_emb']*options['dim_word_src']])
-    unk_ctx_emb = get_layer('ff')[1](tparams, 
-                                     unk_ctx_wrd_emb, 
+    unk_ctx_emb = get_layer('ff')[1](tparams,
+                                     unk_ctx_wrd_emb,
                                      options,
 				     prefix='ff_embedding',
 			             activ='tanh')
-	
+
     # word embedding (source), forward and backward
-    x_temp = x.flatten();    
+    x_temp = x.flatten();
     ones_vec = tensor.switch(tensor.eq(x_temp, 1), 1, 0)
     cum_sum = tensor.extra_ops.cumsum(ones_vec)
     cmb_x_vector = tensor.switch(tensor.eq(x_temp, 1), cum_sum + options['n_words_src'] - 1,  x_temp)
-    c_word_embedding = concatenate([tparams['Wemb'], unk_ctx_emb], axis=0) 
+    c_word_embedding = concatenate([tparams['Wemb'], unk_ctx_emb], axis=0)
     emb = c_word_embedding[cmb_x_vector[:]];
     emb = emb.reshape([n_timesteps, n_samples, options['dim_word_src']])
-    
+
     cmb_x_vectorr = cmb_x_vector[::-1]
     embr = c_word_embedding[cmb_x_vectorr[:]];
     embr = embr.reshape([n_timesteps, n_samples, options['dim_word_src']])
@@ -392,7 +444,7 @@ def build_sampler(tparams, options, trng):
 
     # compile a function to do the whole thing above, next word probability,
     # sampled word for the next target, next hidden state to be used
-    print 'Building f_next..' 
+    print 'Building f_next..'
     inps = [y, ctx, init_state]
     outs = [next_probs, next_sample, next_state]
     f_next = theano.function(inps, outs, name='f_next', profile=profile)
@@ -400,7 +452,7 @@ def build_sampler(tparams, options, trng):
 
     return f_init, f_next
 
-    
+
 def get_minibatches_idx(n, minibatch_size, shuffle=False):
     """
     Used to shuffle the dataset at each iteration.
@@ -534,25 +586,37 @@ def gen_sample(ctx_len_emb,
 
 
 # calculate the log probablities on a given corpus using translation model
-def pred_probs(f_log_probs, prepare_data, ctx_len_emb ,options, stream, verbose=True):
+# def pred_probs(f_log_probs, prepare_data, ctx_len_emb ,options, stream):
+
+def pred_probs(f_log_probs, ctx_len_emb ,options, stream):
     probs = []
     n_done = 0
 
-    for x, y in stream.get_epoch_iterator():
-        n_done += len(x)
-        x, x_mask, y, y_mask = prepare_data(x, y)
+    for x, x_mask, y, y_mask in stream.get_epoch_iterator():
+	n_done += len(x)
+
+       #x, x_mask, y, y_mask = prepare_data(x, y)
+
         unk_ctx = get_ctx_matrix(x, ctx_len_emb)
+
         pprobs = f_log_probs(x, x_mask, y, y_mask, unk_ctx)
         for pp in pprobs:
             probs.append(pp)
 
-        if numpy.isnan(numpy.mean(probs)):
-            ipdb.set_trace()
 
-        if verbose:
-            print >> sys.stderr, '%d samples computed' % (n_done)
+	if not numpy.isfinite(numpy.mean(probs)):
+            raise RuntimeError('non-finite probabilities')
 
     return numpy.array(probs)
 
-
+def save_params(params, filename, symlink=None):
+    """Save the parameters.
+    Saves the parameters as an ``.npz`` file. It optionally also creates a
+    symlink to this archive.
+    """
+    numpy.savez(filename, **params)
+    if symlink:
+        if os.path.lexists(symlink):
+            os.remove(symlink)
+        os.symlink(filename, symlink)
 

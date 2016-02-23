@@ -1,0 +1,52 @@
+{
+  "training": {
+    "optimizer": "adadelta",
+    "alpha_c": 0,
+    "clip_c": 1,
+    "decay_c": 0,
+    "patience": 10,
+    "finish_after": 10000000,
+    "lrate": 0.0001,
+    "max_epochs": 5000
+  },
+  "multi": {
+    "valid_sync": true,
+    "train_len": 32,
+    "control_port": 5567,
+    "batch_port": 5568,
+    "beta": 0.9,
+    "log_port": 5569
+  },
+  "management": {
+    "sample_freq": 1000,
+    "valid_freq": 1000,
+    "saveto": "model",
+    "reload_": false,
+    "save_freq": 1000
+  },
+  "data": {
+    "src": "/data/lisatmp3/nmt/data/en-fr/engish.en.tok",
+    "src_vocab": "/data/lisatmp3/nmt/data/en-fr/eng_dict",
+    "trg": "/data/lisatmp3/nmt/data/en-fr/french.fr.tok",
+    "trg_vocab": "/data/lisatmp3/nmt/data/en-fr/french_dict",
+    "valid_src": "/data/lisatmp3/nmt/data/en-fr/newstest2012.en.tok",
+    "valid_trg": "/data/lisatmp3/nmt/data/en-fr/newstest2012.fr.tok", 
+    "batch_size": 64,
+    "n_words": 30000,
+    "valid_batch_size": 64,
+    "max_src_length": 50,
+    "max_trg_length": 50,    
+    "n_words_src": 30000
+  },
+  "model": {
+    "dim": 1024,
+    "use_dropout": false,
+    "dim_word_src": 620,
+    "decoder": "gru_cond",
+    "encoder": "gru",
+    "n_words_src": 30000,
+    "n_words": 30000,
+    "ctx_len_emb": 5,
+    "dim_word_trg": 620
+  }
+}

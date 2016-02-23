@@ -4,13 +4,18 @@ from theano import tensor
 import numpy as np
 
 import six
-from utils import itemlist
-import settings
 
+from utils import (
+    itemlist,
+)
+
+
+import settings
 profile = settings.profile
 
-# optimizers
+
 # name(hyperp, tparams, grads, inputs (list), cost) = f_grad_shared, f_update
+
 def adam(lr, tparams, grads, inp, cost):
     gshared = [theano.shared(p.get_value() * 0.,
                              name='%s_grad' % k)
