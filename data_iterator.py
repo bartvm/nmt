@@ -34,10 +34,16 @@ class Shuffle(Transformer):
     def _cache(self):
         temp_caches = [[] for _ in self.sources]
         for i in range(self.buffer_size):
-            for temp_cache, data in zip(temp_caches,
-                                        next(self.child_epoch_iterator)):
-                temp_cache.append(data)
-        shuffled_indices = numpy.random.permutation(self.buffer_size)
+            try:
+                for temp_cache, data in zip(temp_caches,
+                                            next(self.child_epoch_iterator)):
+                    temp_cache.append(data)
+            except StopIteration:
+                if i:
+                    pass
+                else:
+                    raise
+        shuffled_indices = numpy.random.permutation(len(temp_caches[0]))
         for i in shuffled_indices:
             for temp_cache, cache in zip(temp_caches, self.cache):
                 cache.append(temp_cache[i])
@@ -65,7 +71,7 @@ def load_dict(filename, n_words=0):
     return dict_
 
 
-def get_stream(source, target, source_dict, target_dict, batch_size,
+def get_stream(source, target, source_dict, target_dict, batch_size=128,
                buffer_multiplier=100, n_words_source=0, n_words_target=0,
                max_src_length=None, max_trg_length=None):
     """Returns a stream over sentence pairs.
