@@ -34,10 +34,16 @@ class Shuffle(Transformer):
     def _cache(self):
         temp_caches = [[] for _ in self.sources]
         for i in range(self.buffer_size):
-            for temp_cache, data in zip(temp_caches,
-                                        next(self.child_epoch_iterator)):
-                temp_cache.append(data)
-        shuffled_indices = numpy.random.permutation(self.buffer_size)
+            try:
+                for temp_cache, data in zip(temp_caches,
+                                            next(self.child_epoch_iterator)):
+                    temp_cache.append(data)
+            except StopIteration:
+                if i:
+                    pass
+                else:
+                    raise
+        shuffled_indices = numpy.random.permutation(len(temp_caches[0]))
         for i in shuffled_indices:
             for temp_cache, cache in zip(temp_caches, self.cache):
                 cache.append(temp_cache[i])
