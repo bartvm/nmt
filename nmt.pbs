@@ -93,6 +93,6 @@ THEANO_FLAGS=device=${GPUS[0]} python -c "import theano.sandbox.cuda; theano.san
 # For some strange reason this is set to C (ANSI_X3.4-1968)
 export LANG=en_US.UTF-8
 
-# Let's run this thing (but keep Theano's cache if things go wrong)
+# Let's run this thing
 set +e
 platoon-launcher nmt ${GPUS[@]} -d -c "$_2 ${#GPUS[@]}" -w "$control_port"

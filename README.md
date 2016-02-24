@@ -10,6 +10,11 @@ than Blocks that we can hack away at if needed for multi-GPU.
 To have a central collection of research ideas and discussions, please create
 issues and comment on them.
 
+## Setting up your environment
+
+To run these experiments you need at minimum an environment as described
+in `environment.yml`.
+
 ## Training on the lab computers
 
 To train efficiently, make sure of the following:
@@ -26,6 +31,30 @@ PLATOON_LOGS/nmt/*/ | head -n 1)*"`.
 
 Starting a single GPU experiment is done with `python nmt_single.py
 config.json`.
+
+## Training on Helios
+
+To submit jobs on Helios, submit the `nmt.pbs` file using e.g.
+
+```bash
+msub nmt.pbs -F "\"config.json\"" -l nodes=1:gpus=2 -l walltime=1:00:00
+```
+
+Note that by default K20 GPUs are assigned for multi-GPU experiments.
+K80s usually have a higher availability. They can be requested by adding
+`-l feature=k80`.
+
+This submission script does the following:
+
+* Read data from a shared directory, `$RAP/nmt`
+* Set `THEANO_FLAGS`
+* Import Theano to make sure that everything works
+* Pick random ports for communication, batches, and the log. This way
+  multiple jobs on the same node don't interfere with each other.
+
+It assumes that your Python installation is contained in
+`$HOME/miniconda3`. If it is elsewhere, either change `nmt.pbs` or
+change your `PATH` in your `.bashrc`.
 
 ## WMT16 data
 

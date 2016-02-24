@@ -74,7 +74,6 @@ def train(worker, model_options, data_options,
     inps = [x, x_mask, y, y_mask]
 
     LOGGER.info('Building sampler')
-    worker.start_compilation()
     f_init, f_next = build_sampler(tparams, model_options, trng)
 
     # before any regularizer
