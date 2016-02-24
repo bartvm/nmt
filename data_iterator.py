@@ -1,14 +1,46 @@
 import io
 from itertools import count
 
+import numpy
+
 from fuel.datasets.text import TextFile
 from fuel.transformers import Merge
 from fuel.schemes import ConstantScheme
-from fuel.transformers import Batch, Cache, Mapping, SortMapping, Padding
+from fuel.transformers import (Batch, Cache, Mapping, SortMapping, Padding,
+                               Filter, Transformer)
 
 
 EOS_TOKEN = '<EOS>'  # 0
 UNK_TOKEN = '<UNK>'  # 1
+
+
+class Shuffle(Transformer):
+    def __init__(self, data_stream, buffer_size, **kwargs):
+        if kwargs.get('iteration_scheme') is not None:
+            raise ValueError
+        super(Shuffle, self).__init__(
+                data_stream, produces_examples=data_stream.produces_examples,
+                **kwargs)
+        self.buffer_size = buffer_size
+        self.cache = [[] for _ in self.sources]
+
+    def get_data(self, request=None):
+        if request is not None:
+            raise ValueError
+        if not self.cache[0]:
+            self._cache()
+        return tuple(cache.pop() for cache in self.cache)
+
+    def _cache(self):
+        temp_caches = [[] for _ in self.sources]
+        for i in range(self.buffer_size):
+            for temp_cache, data in zip(temp_caches,
+                                        next(self.child_epoch_iterator)):
+                temp_cache.append(data)
+        shuffled_indices = numpy.random.permutation(self.buffer_size)
+        for i in shuffled_indices:
+            for temp_cache, cache in zip(temp_caches, self.cache):
+                cache.append(temp_cache[i])
 
 
 def _source_length(sentence_pair):
@@ -33,8 +65,9 @@ def load_dict(filename, n_words=0):
     return dict_
 
 
-def get_stream(source, target, source_dict, target_dict, batch_size=128,
-               buffer_multiplier=100, n_words_source=0, n_words_target=0):
+def get_stream(source, target, source_dict, target_dict, batch_size,
+               buffer_multiplier=100, n_words_source=0, n_words_target=0,
+               max_src_length=None, max_trg_length=None):
     """Returns a stream over sentence pairs.
 
     Parameters
@@ -77,6 +110,15 @@ def get_stream(source, target, source_dict, target_dict, batch_size=128,
     ]
     merged = Merge(streams, ('source', 'target'))
 
+    # Filter sentence lengths
+    if max_src_length or max_trg_length:
+        def filter_pair(pair):
+            src, trg = pair
+            src_ok = (not max_src_length) or len(src) < max_src_length
+            trg_ok = (not max_trg_length) or len(trg) < max_trg_length
+            return src_ok and trg_ok
+        merged = Filter(merged, filter_pair)
+
     # Batches of approximately uniform size
     large_batches = Batch(
         merged,
@@ -84,6 +126,7 @@ def get_stream(source, target, source_dict, target_dict, batch_size=128,
     )
     sorted_batches = Mapping(large_batches, SortMapping(_source_length))
     batches = Cache(sorted_batches, ConstantScheme(batch_size))
-    masked_batches = Padding(batches)
+    shuffled_batches = Shuffle(batches, buffer_multiplier)
+    masked_batches = Padding(shuffled_batches)
 
     return masked_batches

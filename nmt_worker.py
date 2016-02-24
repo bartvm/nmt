@@ -1,8 +1,8 @@
 from __future__ import print_function
 
-import copy
 import logging
 import os
+import sys
 import time
 
 import numpy
@@ -20,7 +20,8 @@ from nmt_base import (init_params, build_model, build_sampler, save_params,
                       pred_probs, load_data)
 from utils import unzip, init_tparams, load_params, itemlist
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s:%(levelname)s:%(name)s:%(message)s')
 LOGGER = logging.getLogger(__name__)
 
 
@@ -41,9 +42,11 @@ def train(worker, model_options, data_options,
           sample_freq,   # generate some samples after every sampleFreq
           control_port,
           batch_port,
+          log_port,
           reload_):
 
-    LOGGER.info('Connecting to data socket and loading validation data')
+    LOGGER.info('Connecting to data socket ({}) and loading validation data'
+                .format(batch_port))
     worker.init_mb_sock(batch_port)
     _, _, valid_stream = load_data(**data_options)
 
@@ -59,7 +62,8 @@ def train(worker, model_options, data_options,
 
     LOGGER.info('Initializing parameters')
     tparams = init_tparams(params)
-    worker.init_shared_params(tparams.values(), param_sync_rule=EASGD(0.5))
+    alpha = worker.send_req('alpha')
+    worker.init_shared_params(tparams.values(), param_sync_rule=EASGD(alpha))
 
     # use_noise is for dropout
     trng, use_noise, \
@@ -122,7 +126,7 @@ def train(worker, model_options, data_options,
 
     LOGGER.info('Optimization')
 
-    log = RemoteLogger()
+    log = RemoteLogger(port=log_port)
     train_start = time.clock()
     best_p = None
 
@@ -132,7 +136,7 @@ def train(worker, model_options, data_options,
     uidx = 0
     while True:
         step = worker.send_req('next')
-        LOGGER.info('Received command: {}'.format(step))
+        LOGGER.debug('Received command: {}'.format(step))
         if step == 'train':
             use_noise.set_value(1.)
             for i in xrange(train_len):
@@ -153,10 +157,11 @@ def train(worker, model_options, data_options,
                     float(y_mask.sum(0).mean())
                 log_entry['update_time'] = time.clock() - update_start
                 log_entry['train_time'] = time.clock() - train_start
+                log_entry['time'] = time.time()
                 log.log(log_entry)
 
             step = worker.send_req({'done': train_len})
-            LOGGER.info("Syncing with global params")
+            LOGGER.debug("Syncing with global params")
             worker.sync_params(synchronous=True)
 
         if step == 'valid':
@@ -167,10 +172,12 @@ def train(worker, model_options, data_options,
             valid_err = float(valid_errs.mean())
             res = worker.send_req({'valid_err': valid_err})
             log.log({'validation_cost': valid_err,
-                     'train_time': time.clock() - train_start})
+                     'train_time': time.clock() - train_start,
+                     'time': time.time()})
 
-            if res == 'best':
+            if res == 'best' and saveto:
                 best_p = unzip(tparams)
+                save_params(best_p, model_filename, saveto_filename)
 
             if valid_sync:
                 worker.copy_to_local()
@@ -181,26 +188,10 @@ def train(worker, model_options, data_options,
     # Release all shared ressources.
     worker.close()
 
-    LOGGER.info('Saving')
-
-    if best_p is not None:
-        params = best_p
-    else:
-        params = unzip(tparams)
-
-    use_noise.set_value(0.)
-
-    if saveto:
-        numpy.savez(saveto, **best_p)
-        LOGGER.info('model saved')
-
-    params = copy.copy(best_p)
-    save_params(params, model_filename, saveto_filename)
-
 
 if __name__ == "__main__":
-    LOGGER.info('Connecting to worker')
-    worker = Worker(control_port=5567)
+    LOGGER.info('Connecting to worker ({})'.format(sys.argv[1]))
+    worker = Worker(int(sys.argv[1]))
     LOGGER.info('Retrieving configuration')
     config = worker.send_req('config')
     train(worker, config['model'], config['data'],

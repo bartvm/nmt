@@ -17,7 +17,6 @@ from utils import dropout_layer, norm_weight, concatenate
 from layers import get_layer
 from data_iterator import get_stream, load_dict
 
-logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger(__name__)
 
 
@@ -25,7 +24,8 @@ def load_data(src, trg,
               valid_src, valid_trg,
               src_vocab, trg_vocab,
               n_words, n_words_src,
-              batch_size, valid_batch_size):
+              batch_size, valid_batch_size,
+              max_src_length, max_trg_length):
     LOGGER.info('Loading data')
 
     dictionaries = [src_vocab, trg_vocab]
@@ -47,7 +47,9 @@ def load_data(src, trg,
                               dictionaries[1],
                               n_words_source=n_words_src,
                               n_words_target=n_words,
-                              batch_size=batch_size)
+                              batch_size=batch_size,
+                              max_src_length=max_src_length,
+                              max_trg_length=max_trg_length)
     valid_stream = get_stream([valid_datasets[0]],
                               [valid_datasets[1]],
                               dictionaries[0],

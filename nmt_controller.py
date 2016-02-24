@@ -2,8 +2,10 @@ from __future__ import print_function
 import binascii
 import io
 import json
+import logging
 import os
 import shutil
+import signal
 import sys
 from multiprocessing import Process
 
@@ -13,13 +15,17 @@ from platoon.channel import Controller
 
 from nmt_base import load_data
 
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s:%(levelname)s:%(name)s:%(message)s')
+LOGGER = logging.getLogger(__name__)
+
 
 class NMTController(Controller):
     """
     This multi-process controller implements patience-based early-stopping SGD
     """
 
-    def __init__(self, experiment_id, config):
+    def __init__(self, experiment_id, config, num_workers):
         """
         Initialize the NMTController
 
@@ -29,11 +35,16 @@ class NMTController(Controller):
             A string that uniquely identifies this run.
         config : dict
             The deserialized JSON configuration file
+        num_workers : int
+            The number of workers (GPUs), used to calculate the alpha
+            parameter for EASGD.
 
         """
+        self.beta = config['multi'].pop('beta')
         self.config = config
+        LOGGER.info('Setting up controller ({})'
+                    .format(config['multi']['control_port']))
         super(NMTController, self).__init__(config['multi']['control_port'])
-        self.batch_port = config['multi']['batch_port']
         self.patience = config['training']['patience']
         self.max_mb = config['training']['finish_after']
 
@@ -43,23 +54,43 @@ class NMTController(Controller):
         self.min_valid_cost = numpy.inf
 
         self.valid = False
+        self._stop = False
+
+        signal.signal(signal.SIGTERM, self.stop)
+        signal.signal(signal.SIGINT, self.stop)
 
         self.experiment_id = experiment_id
         ServerLogger(filename='{}.log.jsonl.gz'.format(self.experiment_id),
-                     threaded=True)
+                     threaded=True, port=config['multi']['log_port'])
+
+        self.num_workers = num_workers
+
+    def stop(self, signum, frame):
+        print('Received signal {}'.format(signum))
+        self._stop = True
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
 
     def start_batch_server(self):
-        self.p = Process(target=self._send_mb)
+        self.p = Process(target=self._send_mb,
+                         args=(self.config['multi']['batch_port'],))
         self.p.daemon = True
         self.p.start()
 
-    def _send_mb(self):
-        self.init_data(self.batch_port)
+    def _send_mb(self, batch_port):
+        LOGGER.info('Loading training data stream')
         _, train_stream, _ = load_data(**self.config['data'])
 
+        LOGGER.info('Connecting to socket ({})'
+                    .format(batch_port))
+        self.init_data(batch_port)
+
         while True:
+            LOGGER.info('Start new epoch sending batches')
             for x, x_mask, y, y_mask in train_stream.get_epoch_iterator():
+                LOGGER.debug('Sending batch')
                 self.send_mb([x.T, x_mask.T, y.T, y_mask.T])
+                LOGGER.debug('Sent batch')
 
     def handle_control(self, req, worker_id):
         """
@@ -90,6 +121,9 @@ class NMTController(Controller):
 
         if req == 'config':
             control_response = self.config
+        elif req == 'alpha':
+            tau = self.config['multi']['train_len']
+            control_response = self.beta / tau / self.num_workers
         elif req == 'experiment_id':
             control_response = self.experiment_id
         elif req == 'next':
@@ -113,7 +147,8 @@ class NMTController(Controller):
             else:
                 self.bad_counter += 1
 
-        if self.uidx > self.max_mb or self.bad_counter > self.patience:
+        if (self._stop or self.uidx > self.max_mb or
+                self.bad_counter > self.patience):
             control_response = 'stop'
             self.worker_is_done(worker_id)
 
@@ -124,10 +159,11 @@ if __name__ == '__main__':
     # Load the configuration file
     with io.open(sys.argv[1]) as f:
         config = json.load(f)
+    num_workers = int(sys.argv[2])
     # Create unique experiment ID and backup config file
     experiment_id = binascii.hexlify(os.urandom(3)).decode()
     shutil.copyfile(sys.argv[1], '{}.config.json'.format(experiment_id))
     # Start controller
-    l = NMTController(experiment_id, config)
+    l = NMTController(experiment_id, config, num_workers)
     l.start_batch_server()
     l.serve()
