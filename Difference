@@ -1,0 +1,1944 @@
+diff --git a/LICENSE b/LICENSE
+deleted file mode 100644
+index 0e37cd5..0000000
+--- a/LICENSE
++++ /dev/null
+@@ -1,22 +0,0 @@
+-The MIT License (MIT)
+-
+-Copyright (c) 2015 Bart van Merriënboer
+-
+-Permission is hereby granted, free of charge, to any person obtaining a copy
+-of this software and associated documentation files (the "Software"), to deal
+-in the Software without restriction, including without limitation the rights
+-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+-copies of the Software, and to permit persons to whom the Software is
+-furnished to do so, subject to the following conditions:
+-
+-The above copyright notice and this permission notice shall be included in all
+-copies or substantial portions of the Software.
+-
+-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+-SOFTWARE.
+-
+diff --git a/Multi-GPU experiments.py b/Multi-GPU experiments.py
+new file mode 100644
+index 0000000..de37009
+--- /dev/null
++++ b/Multi-GPU experiments.py	
+@@ -0,0 +1,184 @@
++
++# coding: utf-8
++
++# In[1]:
++
++import glob
++import gzip
++import json
++from collections import defaultdict
++from itertools import cycle
++
++import numpy as np
++import seaborn as sns
++from matplotlib import pyplot as plt
++get_ipython().magic('matplotlib inline')
++
++
++# In[2]:
++
++def smooth(window, x, y=None):
++    def convolve(window, z):
++        return np.convolve(z, np.ones((window,)) / window, mode='same')[window // 2:-window // 2]
++    if y is None:
++        return convolve(window, x)
++    else:
++        return x[window // 2:-window // 2], convolve(window, y)
++
++
++# In[93]:
++
++# Plotting settings
++plt.figure(figsize=(12,8))
++plt.rc('text', usetex=True)
++colors = iter(sns.color_palette("Paired", 10))
++smoothing = 1000
++
++# Multi-GPU experiments
++experiments = list(sorted(set(map(lambda filename: filename.split('.')[0], glob.glob('*.gz')))))
++experiments.remove('6b8a3e')
++experiments = experiments + ['6b8a3e']
++
++with gzip.open('6b8a3e.log.jsonl.gz', mode='rt') as f:
++    _times, _costs = [], []
++    start_time = json.loads(f.readline())['train_time']
++    f.seek(0)
++    for entry in f:
++        entry = json.loads(entry)
++        if 'cost' not in entry:
++            continue
++        _times.append(entry['train_time'] - start_time)
++        _costs.append(entry['cost'] / entry['average_target_length'])
++    _times, _costs = map(np.asarray, smooth(smoothing, _times, _costs))
++    i = np.argsort(_costs)
++    _times, _costs = _times[i], _costs[i]
++
++for experiment in sorted(experiments):
++    with open('{}.config.json'.format(experiment)) as f:
++        config = json.loads(f.read())
++    if experiment == '6b8a3e' or config['multi'].get('algorithm', 'easgd') == 'asgd':
++        continue
++    with gzip.open('{}.log.jsonl.gz'.format(experiment), mode='rt') as f:
++        workers = set()
++        times, costs = defaultdict(list), defaultdict(list)
++        start_time = json.loads(f.readline())['train_time']
++        f.seek(0)
++        for entry in f:
++            entry = json.loads(entry)
++            if 'cost' not in entry:
++                continue
++            workers.add(entry['remote_log'])
++            costs[entry['remote_log']].append(entry['cost'] / entry['average_target_length'])
++            times[entry['remote_log']].append(entry['train_time'] - start_time)
++    color = next(colors)
++    for worker in costs.keys():
++        _t, _c = smooth(smoothing, times[worker], costs[worker])
++        _t_div = np.interp(_c, _costs, _times)
++        plt.plot(_t, _t_div / _t,
++                 color=color, alpha=0.8,
++                 label='{} GPUs, $\tau={}$, $\\beta={}$'
++                   .format(len(workers),
++                           config['multi']['train_len'],
++                           config['multi']['beta']) if worker == 1 else None)
++
++# Plotting
++plt.legend()
++plt.xlabel('Training time (s)')
++plt.ylabel('Speedup (smoothed over {} entries)'.format(smoothing))
++plt.ylim([0.5, 2])
++plt.show()
++
++
++# In[91]:
++
++# Plotting settings
++plt.figure(figsize=(12,8))
++plt.rc('text', usetex=True)
++colors = iter(sns.color_palette("Paired", 10))
++smoothing = 1000
++
++# Multi-GPU experiments
++experiments = list(sorted(set(map(lambda filename: filename.split('.')[0], glob.glob('*.gz')))))
++experiments.remove('6b8a3e')
++experiments = experiments + ['6b8a3e']
++
++for experiment in sorted(experiments):
++    with open('{}.config.json'.format(experiment)) as f:
++        config = json.loads(f.read())
++    if config['multi'].get('algorithm', 'easgd') == 'asgd':
++        continue
++    with gzip.open('{}.log.jsonl.gz'.format(experiment), mode='rt') as f:
++        workers = set()
++        times, costs = defaultdict(list), defaultdict(list)
++        start_time = json.loads(f.readline())['train_time']
++        f.seek(0)
++        for entry in f:
++            entry = json.loads(entry)
++            if 'cost' not in entry:
++                continue
++            workers.add(entry['remote_log'])
++            costs[entry['remote_log']].append(entry['cost'] / entry['average_target_length'])
++            times[entry['remote_log']].append(entry['train_time'] - start_time)
++    color = next(colors)
++    for worker in costs.keys():
++        plt.plot(*smooth(smoothing, times[worker], costs[worker]),
++                 color=color, alpha=0.8,
++                 label='{} GPUs, $\tau={}$, $\\beta={}$'
++                   .format(len(workers),
++                           config['multi']['train_len'],
++                           config['multi']['beta']) if worker == 1 else None)
++
++# Plotting
++plt.legend()
++plt.xlabel('Training time (s)')
++plt.ylabel('Training cost per token (smoothed over {} entries)'.format(smoothing))
++plt.show()
++
++
++# In[94]:
++
++# Plotting settings
++plt.figure(figsize=(12,8))
++plt.rc('text', usetex=True)
++colors = iter(sns.color_palette("Paired", 10))
++smoothing = 1000
++
++# Multi-GPU experiments
++experiments = set(map(lambda filename: filename.split('.')[0], glob.glob('*.gz')))
++
++for experiment in sorted(experiments):
++    with open('{}.config.json'.format(experiment)) as f:
++        config = json.loads(f.read())
++    if config['multi'].get('algorithm', 'easgd') == 'easgd':
++        continue
++    with gzip.open('{}.log.jsonl.gz'.format(experiment), mode='rt') as f:
++        workers = set()
++        times, costs = defaultdict(list), defaultdict(list)
++        start_time = json.loads(f.readline())['train_time']
++        f.seek(0)
++        for entry in f:
++            entry = json.loads(entry)
++            if 'cost' not in entry:
++                continue
++            workers.add(entry['remote_log'])
++            costs[entry['remote_log']].append(entry['cost'] / entry['average_target_length'])
++            times[entry['remote_log']].append(entry['train_time'] - start_time)
++    color = next(colors)
++    for worker in costs.keys():
++        plt.plot(*smooth(smoothing, times[worker], costs[worker]),
++                 color=color, alpha=0.8,
++                 label='{} GPUs, communication period {}'
++                   .format(len(workers),
++                           config['multi']['train_len']) if worker == 1 else None)
++
++# Plotting
++plt.legend()
++plt.xlabel('Training time (s)')
++plt.ylabel('Training cost per token (smoothed over {} entries)'.format(smoothing))
++plt.show()
++
++
++# In[ ]:
++
++
++
+diff --git a/README.md b/README.md
+index 71489c6..d6b2aa4 100644
+--- a/README.md
++++ b/README.md
+@@ -1,60 +1,8 @@
+ # Neural machine translation
+ 
+-Repository to collect code for neural machine translation internally at MILA.
+-The short-term objective is to have an attention-based model working on
+-multiple GPUs (see [#6](https://github.com/bartvm/nmt/issues/6)). My proposal
+-is to base the model code of Cho's for now (see
+-[#1](https://github.com/bartvm/nmt/issues/1), because it has simpler internals
+-than Blocks that we can hack away at if needed for multi-GPU.
++Repository to collect code for neural machine translation internally at MILA. The short-term objective is to have an attention-based model working on multiple GPUs (see [#6](https://github.com/bartvm/nmt/issues/6)). My proposal is to base the model code of Cho's for now (see [#1](https://github.com/bartvm/nmt/issues/1), because it has simpler internals than Blocks that we can hack away at if needed for multi-GPU.
+ 
+-To have a central collection of research ideas and discussions, please create
+-issues and comment on them.
+-
+-## Setting up your environment
+-
+-To run these experiments you need at minimum an environment as described
+-in `environment.yml`.
+-
+-## Training on the lab computers
+-
+-To train efficiently, make sure of the following:
+-
+-* Use cuDNN 4; if cuDNN is disabled it will take the gradient of the
+-  softmax on the CPU which is much slower.
+-* Enable CNMeM (e.g. add `cnmem = 0.98` in the `[lib]` section of your
+-  `.theanorc`).
+-
+-Launching with Platoon can be done using `platoon-launcher nmt gpu0 gpu1
+--c="config.json 4"` where 4 is the number of workers.. To watch the logs
+-it's wortwhile to alias the command `watch tail "$(ls -1dt
+-PLATOON_LOGS/nmt/*/ | head -n 1)*"`.
+-
+-Starting a single GPU experiment is done with `python nmt_single.py
+-config.json`.
+-
+-## Training on Helios
+-
+-To submit jobs on Helios, submit the `nmt.pbs` file using e.g.
+-
+-```bash
+-msub nmt.pbs -F "\"config.json\"" -l nodes=1:gpus=2 -l walltime=1:00:00
+-```
+-
+-Note that by default K20 GPUs are assigned for multi-GPU experiments.
+-K80s usually have a higher availability. They can be requested by adding
+-`-l feature=k80`.
+-
+-This submission script does the following:
+-
+-* Read data from a shared directory, `$RAP/nmt`
+-* Set `THEANO_FLAGS`
+-* Import Theano to make sure that everything works
+-* Pick random ports for communication, batches, and the log. This way
+-  multiple jobs on the same node don't interfere with each other.
+-
+-It assumes that your Python installation is contained in
+-`$HOME/miniconda3`. If it is elsewhere, either change `nmt.pbs` or
+-change your `PATH` in your `.bashrc`.
++To have a central collection of research ideas and discussions, please create issues and comment on them.
+ 
+ ## WMT16 data
+ 
+diff --git a/config.json b/config.json
+index e80c5f7..8c13685 100644
+--- a/config.json
++++ b/config.json
+@@ -10,8 +10,8 @@
+     "max_epochs": 5000
+   },
+   "multi": {
+-    "valid_sync": true,
+-    "train_len": 32,
++    "valid_sync": false,
++    "train_len": 2,
+     "control_port": 5567,
+     "batch_port": 5568,
+     "beta": 0.9,
+@@ -19,33 +19,34 @@
+   },
+   "management": {
+     "sample_freq": 1000,
+-    "valid_freq": 5000,
++    "valid_freq": 1000,
+     "saveto": "model",
+-    "reload_": true,
+-    "save_freq": 5000
++    "reload_": false,
++    "save_freq": 1000
+   },
+   "data": {
+-    "src": "train/wmt16.de-en.tok.true.clean.shuf.en",
+-    "src_vocab": "train/wmt16.de-en.vocab.en",
+-    "trg": "train/wmt16.de-en.tok.true.clean.shuf.de",
+-    "valid_src": "dev/newstest2013.tok.true.en",
+-    "trg_vocab": "train/wmt16.de-en.vocab.de",
+-    "batch_size": 64,
++    "src": "/data/lisatmp3/nmt/data/en-fr/engish.en.tok",
++    "src_vocab": "/data/lisatmp3/nmt/data/en-fr/eng_dict",
++    "trg": "/data/lisatmp3/nmt/data/en-fr/french.fr.tok",
++    "trg_vocab": "/data/lisatmp3/nmt/data/en-fr/french_dict",
++    "valid_src": "/data/lisatmp3/nmt/data/en-fr/newstest2012.en.tok",
++    "valid_trg": "/data/lisatmp3/nmt/data/en-fr/newstest2012.fr.tok", 
++    "batch_size": 16,
+     "n_words": 30000,
+-    "valid_batch_size": 64,
+-    "n_words_src": 30000,
+-    "valid_trg": "dev/newstest2013.tok.true.de",
++    "valid_batch_size": 16,
+     "max_src_length": 50,
+-    "max_trg_length": 50
++    "max_trg_length": 50,    
++    "n_words_src": 30000
+   },
+   "model": {
+     "dim": 1024,
+     "use_dropout": false,
+-    "dim_word_src": 512,
++    "dim_word_src": 620,
+     "decoder": "gru_cond",
+     "encoder": "gru",
+     "n_words_src": 30000,
+     "n_words": 30000,
+-    "dim_word_trg": 512
++    "ctx_len_emb": 5,
++    "dim_word_trg": 620
+   }
+ }
+diff --git a/data.sh b/data.sh
+index 4c73aa2..375415e 100644
+--- a/data.sh
++++ b/data.sh
+@@ -28,7 +28,6 @@ function tokenize {
+ 
+ function truecase {
+   [ $# -lt 1 ] && { echo "Usage: $0 filename"; return 1; }
+-  check_moses
+   base="${1%.*}"
+   lang="${1##*.}"
+   $MOSES/scripts/recaser/train-truecaser.perl --model truecase-model.$lang --corpus $1
+diff --git a/data_iterator.py b/data_iterator.py
+index 763eb56..53b607a 100644
+--- a/data_iterator.py
++++ b/data_iterator.py
+@@ -71,7 +71,7 @@ def load_dict(filename, n_words=0):
+     return dict_
+ 
+ 
+-def get_stream(source, target, source_dict, target_dict, batch_size,
++def get_stream(source, target, source_dict, target_dict, batch_size=128,
+                buffer_multiplier=100, n_words_source=0, n_words_target=0,
+                max_src_length=None, max_trg_length=None):
+     """Returns a stream over sentence pairs.
+diff --git a/environment.yml b/environment.yml
+deleted file mode 100644
+index 1143357..0000000
+--- a/environment.yml
++++ /dev/null
+@@ -1,52 +0,0 @@
+-name: root
+-dependencies:
+-- cffi=1.2.1=py35_0
+-- conda=3.19.1=py35_0
+-- conda-env=2.4.5=py35_0
+-- cython=0.23.4=py35_0
+-- freetype=2.5.5=0
+-- h5py=2.5.0=np110py35_4
+-- hdf5=1.8.15.1=2
+-- jbig=2.1=0
+-- jpeg=8d=0
+-- libffi=3.0.13=0
+-- libgfortran=1.0=0
+-- libpng=1.6.17=0
+-- libsodium=1.0.3=0
+-- libtiff=4.0.6=1
+-- mkl=11.3.1=0
+-- numexpr=2.4.6=np110py35_1
+-- numpy=1.10.4=py35_0
+-- openssl=1.0.2f=0
+-- pillow=3.1.1=py35_0
+-- pip=8.0.2=py35_0
+-- pycosat=0.6.1=py35_0
+-- pycparser=2.14=py35_0
+-- pycrypto=2.6.1=py35_0
+-- pytables=3.2.2=np110py35_0
+-- python=3.5.1=0
+-- pyyaml=3.11=py35_1
+-- pyzmq=15.2.0=py35_0
+-- readline=6.2=2
+-- requests=2.9.1=py35_0
+-- scipy=0.17.0=np110py35_1
+-- setuptools=19.6.2=py35_0
+-- six=1.10.0=py35_0
+-- sqlite=3.9.2=0
+-- tk=8.5.18=0
+-- toolz=0.7.4=py35_0
+-- wheel=0.29.0=py35_0
+-- xz=5.0.5=1
+-- yaml=0.1.6=0
+-- zeromq=4.1.3=0
+-- zlib=1.2.8=0
+-- pip:
+-  - fuel (/home/vanmerb/fuel)==0.1.1
+-  - mimir (/home/vanmerb/mimir)==0.1.dev1
+-  - picklable-itertools (/home/vanmerb/picklable-itertools)==0.1.1
+-  - platoon (/home/vanmerb/platoon)==0.5.0
+-  - posix-ipc==1.0.0
+-  - progressbar2==3.6.0
+-  - tables==3.2.2
+-  - theano (/home/vanmerb/Theano)==0.8.0.dev0
+-
+diff --git a/layers.py b/layers.py
+index e4bd35b..6ebaf8c 100644
+--- a/layers.py
++++ b/layers.py
+@@ -3,11 +3,32 @@ from theano import tensor
+ import numpy
+ from utils import uniform_weight, ortho_weight
+ 
++import settings
++profile = settings.profile
++
++# layers: 'name': ('parameter initializer', 'feedforward')
++layers = {'ff': ('param_init_fflayer', 'fflayer'),
++          'gru': ('param_init_gru', 'gru_layer'),
++          'gru_cond': ('param_init_gru_cond', 'gru_cond_layer'), }
++
++
++def get_layer(name):
++    fns = layers[name]
++    return (eval(fns[0]), eval(fns[1]))
++
+ 
+ def zero_vector(length):
+     return numpy.zeros((length, )).astype('float32')
+ 
+ 
++def tanh(x):
++    return tensor.tanh(x)
++
++
++def linear(x):
++    return x
++
++
+ # utility function to slice a tensor
+ def _slice(_x, n, dim):
+     if _x.ndim == 3:
+@@ -15,51 +36,30 @@ def _slice(_x, n, dim):
+     return _x[:, n * dim:(n + 1) * dim]
+ 
+ 
+-def _gru(mask, x_t2gates, x_t2prpsl, h_tm1, U, Ux, activ=tensor.tanh):
++def _gru(m_, x_, xx_, h_, U, Ux, bg=None, bi=None):
+ 
+-    dim = U.shape[0]    # dimension of hidden states
++    dim = U.shape[0]
+ 
+-    # concatenated activations of the gates in a GRU
+-    activ_gates = tensor.nnet.sigmoid(x_t2gates + tensor.dot(h_tm1, U))
++    preact = x_ + tensor.dot(h_, U)
++    if not (bg is None):
++        preact += bg
+ 
+     # reset and update gates
+-    reset_gate = _slice(activ_gates, 0, dim)
+-    update_gate = _slice(activ_gates, 1, dim)
++    r = tensor.nnet.sigmoid(_slice(preact, 0, dim))
++    u = tensor.nnet.sigmoid(_slice(preact, 1, dim))
+ 
+     # compute the hidden state proposal
+-    in_prpsl = x_t2prpsl + reset_gate * tensor.dot(h_tm1, Ux)
+-    h_prpsl = activ(in_prpsl) if activ else in_prpsl
+-
+-    # leaky integrate and obtain next hidden state
+-    h_t = update_gate * h_tm1 + (1. - update_gate) * h_prpsl
++    preact2 = xx_ + r * tensor.dot(h_, Ux)
++    if not (bi is None):
++        preact2 += bi
+ 
+-    # if this time step is not valid, discard the current hidden states
+-    # obtained above and copy the previous hidden states to the current ones.
+-    h_t = mask[:, None] * h_t + (1. - mask)[:, None] * h_tm1
++    h = tensor.tanh(preact2)
+ 
+-    return h_t
+-
+-
+-def _compute_alignment(h_tm1,       # s_{i-1}
+-                       prj_annot,   # proj annotations: U_a * h_j for all j
+-                       Wd_att, U_att, c_att,
+-                       context_mask=None):
+-
+-    # W_a * s_{i-1}
+-    prj_h_tm1 = tensor.dot(h_tm1, Wd_att)
+-
+-    # tanh(W_a * s_{i-1} + U_a * h_j) for all j
+-    nonlin_proj = tensor.tanh(prj_h_tm1[None, :, :] + prj_annot)
+-
+-    # v_a^{T} * tanh(.) + bias
+-    alpha = tensor.dot(nonlin_proj, U_att) + c_att
+-    alpha = alpha.reshape([alpha.shape[0], alpha.shape[1]])
+-    alpha = tensor.exp(alpha - alpha.min(0, keepdims=True))
+-    if context_mask:
+-        alpha = alpha * context_mask
+-    alpha = alpha / alpha.sum(0, keepdims=True)
++    # leaky integrate and obtain next hidden state
++    h = u * h_ + (1. - u) * h
++    h = m_[:, None] * h + (1. - m_)[:, None] * h_
+ 
+-    return alpha
++    return h
+ 
+ 
+ # feedforward layer: affine transformation + point-wise nonlinearity
+@@ -80,11 +80,10 @@ def fflayer(tparams,
+             state_below,
+             options,
+             prefix='rconv',
+-            activ=tensor.tanh,
++            activ='lambda x: tensor.tanh(x)',
+             **kwargs):
+-    h = (tensor.dot(state_below, tparams[prefix + '_W']) +
+-         tparams[prefix + '_b'])
+-    return activ(h) if activ else h
++    return eval(activ)(tensor.dot(state_below, tparams[prefix + '_W']) +
++                       tparams[prefix + '_b'])
+ 
+ 
+ # GRU layer
+@@ -151,6 +150,7 @@ def gru_layer(tparams,
+                                 non_sequences=shared_vars,
+                                 name=prefix + '_layers',
+                                 n_steps=nsteps,
++                                profile=profile,
+                                 strict=True)
+     rval = [rval]
+     return rval
+@@ -260,16 +260,22 @@ def gru_cond_layer(tparams,
+         h1 = _gru(m_, x_, xx_, h_, U, Ux)
+ 
+         # attention
+-        alpha = _compute_alignment(h1, pctx_,
+-                                   W_comb_att, U_att, c_att,
+-                                   context_mask=context_mask)
+-
++        pstate_ = tensor.dot(h1, W_comb_att)
++        pctx__ = pctx_ + pstate_[None, :, :]
++        # pctx__ += xc_
++        pctx__ = tensor.tanh(pctx__)
++        alpha = tensor.dot(pctx__, U_att) + c_att
++        alpha = alpha.reshape([alpha.shape[0], alpha.shape[1]])
++        alpha = tensor.exp(alpha)
++        if context_mask:
++            alpha = alpha * context_mask
++        alpha = alpha / alpha.sum(0, keepdims=True)
+         ctx_ = (cc_ * alpha[:, :, None]).sum(0)  # current context
+ 
+-        new_x_ = tensor.dot(ctx_, Wc) + b_nl
+-        new_xx_ = tensor.dot(ctx_, Wcx) + bx_nl
++        new_x_ = tensor.dot(ctx_, Wc)
++        new_xx_ = tensor.dot(ctx_, Wcx)
+ 
+-        h2 = _gru(m_, new_x_, new_xx_, h1, U_nl, Ux_nl)
++        h2 = _gru(m_, new_x_, new_xx_, h1, U_nl, Ux_nl, bg=b_nl, bi=bx_nl)
+ 
+         return h2, ctx_, alpha.T  # pstate_, preact, preactx, r, u
+ 
+@@ -298,15 +304,6 @@ def gru_cond_layer(tparams,
+             non_sequences=[pctx_, context] + shared_vars,
+             name=prefix + '_layers',
+             n_steps=nsteps,
++            profile=profile,
+             strict=True)
+     return rval
+-
+-# layers: 'name': ('parameter initializer', 'feedforward')
+-layers = {'ff': (param_init_fflayer, fflayer),
+-          'gru': (param_init_gru, gru_layer),
+-          'gru_cond': (param_init_gru_cond, gru_cond_layer)}
+-
+-
+-def get_layer(name):
+-    param_init, layer = layers[name]
+-    return param_init, layer
+diff --git a/nmt.pbs b/nmt.pbs
+deleted file mode 100644
+index 3ef7c97..0000000
+--- a/nmt.pbs
++++ /dev/null
+@@ -1,98 +0,0 @@
+-#!/bin/bash
+-#PBS -A jvb-000-ag
+-#PBS -l signal=SIGTERM@300
+-#PBS -m ae
+-
+-# Invocation: msub nmt.pbs -F "\"config.json\"" -l nodes=1:gpus=2 -l walltime=1:00:00 -l feature=k80
+-
+-echo "Using config file $1"
+-
+-# Kill this job if any of these commands fail
+-set -e
+-
+-cd "${PBS_O_WORKDIR}"
+-
+-# This should load CUDA as well as cuDNN
+-module load cuda/7.5.18 libs/cuDNN/4
+-
+-# Use own Python installation
+-export PATH=$HOME/miniconda3/bin:$PATH
+-
+-# This is where we store e.g. jq
+-export PATH=${RAP}nmt/bin:$PATH
+-
+-# Use the following Theano settings
+-declare -A theano_flags
+-theano_flags["floatX"]="float32"
+-theano_flags["force_device"]="true"
+-theano_flags["base_compiledir"]="/rap/jvb-000-aa/${USER}/theano_compiledir"
+-theano_flags["lib.cnmem"]="0.9"
+-theano_flags["dnn.enabled"]="True"
+-
+-function join { local IFS="$1"; shift; echo "$*"; }
+-function merge {
+-  for i in $(seq 1 $(($# / 2)))
+-  do
+-    eval "k=\${$i}"
+-    eval "v=\${$(($i + $# / 2))}"
+-    rval[$i]="$k=$v"
+-  done
+-  echo $(join , ${rval[@]})
+-}
+-
+-export THEANO_FLAGS=$(merge ${!theano_flags[@]} ${theano_flags[@]})
+-echo "THEANO_FLAGS=$THEANO_FLAGS"
+-
+-# Make sure we pick a port that isn't in use already
+-control_port=$(($(((RANDOM<<15)|RANDOM)) % 16383 + 49152))
+-batch_port=$(($(((RANDOM<<15)|RANDOM)) % 16383 + 49152))
+-log_port=$(($(((RANDOM<<15)|RANDOM)) % 16383 + 49152))
+-
+-# Try to connect to ports to see if they are taken
+-# type nc &>/dev/null
+-# until ! (nc -z localhost $control_port || false)
+-# do
+-#   echo "Trying another control port!"
+-#   control_port=$((control_port+1))
+-# done
+-# until ! (nc -z localhost $batch_port || false) && (( batch_port != control_port ))
+-# do
+-#   echo "Trying another batch port!"
+-#   batch_port=$((batch_port+1))
+-# done
+-
+-# Write ports to config
+-_1="$(mktemp)"
+-cat "$1" | jq ".multi.control_port |= $control_port | .multi.batch_port |= $batch_port | .multi.log_port |= $log_port" > "$_1"
+-
+-# Read data from Luster parallel file system
+-echo "Working from ${RAP}nmt"
+-files=(src trg src_vocab trg_vocab valid_src valid_trg)
+-for file in "${files[@]}"
+-do
+-  filename="${RAP}nmt/$(cat "$_1" | jq -r ".data.$file")"
+-  test -e "$filename" || (echo "$filename doesn't exist" && exit 1)
+-  FILTERS[$((${#FILTERS[@]} + 1))]=".data.$file |= \"${RAP}nmt/\" + ."
+-done
+-_2="$(mktemp)"
+-cat "$_1" | jq  "$(join '|' "${FILTERS[@]}")" > "$_2"
+-
+-# Print final config
+-cat "$_2" | jq '.'
+-
+-# The following GPUs are available
+-for id in $(nvidia-smi --query-gpu=index --format=csv,noheader)
+-do
+-  GPUS[${#GPUS[@]}]="gpu$id"
+-done
+-echo "Using GPUs ${GPUS[*]}"
+-
+-# Make sure the GPU and cuDNN work
+-THEANO_FLAGS=device=${GPUS[0]} python -c "import theano.sandbox.cuda; theano.sandbox.cuda.dnn_available()"
+-
+-# For some strange reason this is set to C (ANSI_X3.4-1968)
+-export LANG=en_US.UTF-8
+-
+-# Let's run this thing
+-set +e
+-platoon-launcher nmt ${GPUS[@]} -d -c "$_2 ${#GPUS[@]}" -w "$control_port"
+diff --git a/nmt_base.py b/nmt_base.py
+index 298fa3b..d204b0a 100644
+--- a/nmt_base.py
++++ b/nmt_base.py
+@@ -1,25 +1,43 @@
+ '''
+ Build a neural machine translation model with soft attention
+ '''
++
++import theano
++from theano import tensor
++from theano.sandbox.rng_mrg import MRG_RandomStreams
++
++import six
++
++from six.moves import cPickle
++from six.moves import xrange
++
++import ipdb
++import numpy
+ import copy
+ import logging
+ import os
+ from collections import OrderedDict
+ 
+-import numpy
+-import six
+-import theano
+-from six.moves import xrange
+-from theano import tensor
+-from theano.sandbox.rng_mrg import MRG_RandomStreams
++import os
++import sys
+ 
+-from utils import dropout_layer, norm_weight, concatenate
++sys.path.append(os.path.dirname(__file__))
++sys.path.append(os.path.join(os.path.dirname(__file__), 'platoon'))
++from collections import OrderedDict
++import settings
+ from layers import get_layer
++from utils import (dropout_layer, norm_weight, get_ctx_matrix,
++		   concatenate)
++
++profile = settings.profile
+ from data_iterator import get_stream, load_dict
+ 
++
++logging.basicConfig(level=logging.INFO)
+ LOGGER = logging.getLogger(__name__)
+ 
+ 
++
+ def load_data(src, trg,
+               valid_src, valid_trg,
+               src_vocab, trg_vocab,
+@@ -27,7 +45,6 @@ def load_data(src, trg,
+               batch_size, valid_batch_size,
+               max_src_length, max_trg_length):
+     LOGGER.info('Loading data')
+-
+     dictionaries = [src_vocab, trg_vocab]
+     datasets = [src, trg]
+     valid_datasets = [valid_src, valid_trg]
+@@ -60,17 +77,63 @@ def load_data(src, trg,
+ 
+     return worddicts_r, train_stream, valid_stream
+ 
++def prepare_data(seqs_x, seqs_y, maxlen=None):
++    lengths_x = [len(s) for s in seqs_x]
++    lengths_y = [len(s) for s in seqs_y]
++    if maxlen is not None:
++        new_seqs_x = []
++        new_seqs_y = []
++        new_lengths_x = []
++        new_lengths_y = []
++        for l_x, s_x, l_y, s_y in zip(lengths_x, seqs_x, lengths_y, seqs_y):
++            if l_x < maxlen and l_y < maxlen:
++                new_seqs_x.append(s_x)
++                new_lengths_x.append(l_x)
++                new_seqs_y.append(s_y)
++                new_lengths_y.append(l_y)
++        lengths_x = new_lengths_x
++        seqs_x = new_seqs_x
++        lengths_y = new_lengths_y
++        seqs_y = new_seqs_y
++
++        if len(lengths_x) < 1 or len(lengths_y) < 1:
++            return None, None, None, None
++
++    n_samples = len(seqs_x)
++    maxlen_x = numpy.max(lengths_x) + 1
++    maxlen_y = numpy.max(lengths_y) + 1
++
++    x = numpy.zeros((maxlen_x, n_samples)).astype('int64')
++    y = numpy.zeros((maxlen_y, n_samples)).astype('int64')
++    x_mask = numpy.zeros((maxlen_x, n_samples)).astype('float32')
++    y_mask = numpy.zeros((maxlen_y, n_samples)).astype('float32')
++
++    for idx, [s_x, s_y] in enumerate(zip(seqs_x, seqs_y)):
++        x[:lengths_x[idx], idx] = s_x
++        x_mask[:lengths_x[idx]+1, idx] = 1.
++        y[:lengths_y[idx], idx] = s_y
++        y_mask[:lengths_y[idx]+1, idx] = 1.
++
++    return x, x_mask, y, y_mask
+ 
+ # initialize all parameters
+ def init_params(options):
+     params = OrderedDict()
+-
+     # embedding
+     params['Wemb'] = norm_weight(options['n_words_src'],
+                                  options['dim_word_src'])
+     params['Wemb_dec'] = norm_weight(options['n_words'],
+                                      options['dim_word_trg'])
+ 
++
++    # MLP for unknown words embedding! Takes
++    # and outputs embedding for unknown words!
++    params = get_layer('ff')[0](options,
++                                params,
++                                prefix='ff_embedding',
++                                nin=options['ctx_len_emb'] * options['dim_word_src'],
++                                nout=options['dim_word_src'])
++
+     # encoder: bidirectional RNN
+     params = get_layer(options['encoder'])[0](options,
+                                               params,
+@@ -124,8 +187,6 @@ def init_params(options):
+ 
+     return params
+ 
+-
+-# build a training model
+ def build_model(tparams, options):
+     opt_ret = dict()
+ 
+@@ -138,16 +199,40 @@ def build_model(tparams, options):
+     y = tensor.matrix('y', dtype='int64')
+     y_mask = tensor.matrix('y_mask', dtype='float32')
+ 
++    # description num_of_unk_words * context_size
++    unk_ctx = tensor.matrix('unk_ctx', dtype='int64')
++
++    #number of unknown words in a batch
++    n_ctx = unk_ctx.shape[0]
++    # get word embedding for the context
++    unk_ctx_wrd_emb = tparams['Wemb'][unk_ctx.flatten()]
++    # reshape the word embedding.
++    unk_ctx_wrd_emb = unk_ctx_wrd_emb.reshape([n_ctx,
++                                               options['ctx_len_emb']*options['dim_word_src']])
++    # given the context embedding,
++    # output the embeddings for
++    # unknown words.
++    unk_ctx_emb = get_layer('ff')[1](tparams,
++                                     unk_ctx_wrd_emb,
++                                     options,
++				     prefix='ff_embedding',
++                                     activ='tanh')
++
++
+     # for the backward rnn, we just need to invert x and x_mask
+     xr = x[::-1]
+     xr_mask = x_mask[::-1]
+-
+     n_timesteps = x.shape[0]
+     n_timesteps_trg = y.shape[0]
+     n_samples = x.shape[1]
+ 
+     # word embedding for forward rnn (source)
+-    emb = tparams['Wemb'][x.flatten()]
++    x_temp = x.flatten();
++    ones_vec = tensor.switch(tensor.eq(x_temp, 1), 1, 0)
++    cum_sum = tensor.extra_ops.cumsum(ones_vec)
++    cmb_x_vector = tensor.switch(tensor.eq(x_temp, 1), cum_sum + options['n_words_src'] - 1,  x_temp)
++    c_word_embedding = concatenate([tparams['Wemb'], unk_ctx_emb], axis=0)
++    emb = c_word_embedding[cmb_x_vector[:]];
+     emb = emb.reshape([n_timesteps, n_samples, options['dim_word_src']])
+     proj = get_layer(options['encoder'])[1](tparams,
+                                             emb,
+@@ -155,7 +240,8 @@ def build_model(tparams, options):
+                                             prefix='encoder',
+                                             mask=x_mask)
+     # word embedding for backward rnn (source)
+-    embr = tparams['Wemb'][xr.flatten()]
++    cmb_x_vectorr = cmb_x_vector[::-1]
++    embr = c_word_embedding[cmb_x_vectorr[:]];
+     embr = embr.reshape([n_timesteps, n_samples, options['dim_word_src']])
+     projr = get_layer(options['encoder'])[1](tparams,
+                                              embr,
+@@ -177,7 +263,7 @@ def build_model(tparams, options):
+                                     ctx_mean,
+                                     options,
+                                     prefix='ff_state',
+-                                    activ=tensor.tanh)
++                                    activ='tanh')
+ 
+     # word embedding (target), we will shift the target sequence one time step
+     # to the right. This is done because of the bi-gram connections in the
+@@ -213,17 +299,17 @@ def build_model(tparams, options):
+                                     proj_h,
+                                     options,
+                                     prefix='ff_logit_lstm',
+-                                    activ=None)
++                                    activ='linear')
+     logit_prev = get_layer('ff')[1](tparams,
+                                     emb,
+                                     options,
+                                     prefix='ff_logit_prev',
+-                                    activ=None)
++                                    activ='linear')
+     logit_ctx = get_layer('ff')[1](tparams,
+                                    ctxs,
+                                    options,
+                                    prefix='ff_logit_ctx',
+-                                   activ=None)
++                                   activ='linear')
+     logit = tensor.tanh(logit_lstm + logit_prev + logit_ctx)
+     if options['use_dropout']:
+         logit = dropout_layer(logit, use_noise, trng)
+@@ -231,7 +317,7 @@ def build_model(tparams, options):
+                                logit,
+                                options,
+                                prefix='ff_logit',
+-                               activ=None)
++                               activ='linear')
+     logit_shp = logit.shape
+     probs = tensor.nnet.softmax(logit.reshape([logit_shp[0] * logit_shp[1],
+                                                logit_shp[2]]))
+@@ -243,20 +329,38 @@ def build_model(tparams, options):
+     cost = cost.reshape([y.shape[0], y.shape[1]])
+     cost = (cost * y_mask).sum(0)
+ 
+-    return trng, use_noise, x, x_mask, y, y_mask, opt_ret, cost
+-
++    return trng, use_noise, x, x_mask, y, y_mask, opt_ret, cost, unk_ctx
+ 
+ # build a sampler
+ def build_sampler(tparams, options, trng):
+     x = tensor.matrix('x', dtype='int64')
++    unk_ctx = tensor.matrix('unk_ctx', dtype='int64')
++
+     xr = x[::-1]
+     n_timesteps = x.shape[0]
+     n_samples = x.shape[1]
++    n_ctx = unk_ctx.shape[0]
++
++    unk_ctx_wrd_emb = tparams['Wemb'][unk_ctx.flatten()]
++    unk_ctx_wrd_emb = unk_ctx_wrd_emb.reshape([n_ctx,
++                                               options['ctx_len_emb']*options['dim_word_src']])
++    unk_ctx_emb = get_layer('ff')[1](tparams,
++                                     unk_ctx_wrd_emb,
++                                     options,
++				     prefix='ff_embedding',
++			             activ='tanh')
+ 
+     # word embedding (source), forward and backward
+-    emb = tparams['Wemb'][x.flatten()]
++    x_temp = x.flatten();
++    ones_vec = tensor.switch(tensor.eq(x_temp, 1), 1, 0)
++    cum_sum = tensor.extra_ops.cumsum(ones_vec)
++    cmb_x_vector = tensor.switch(tensor.eq(x_temp, 1), cum_sum + options['n_words_src'] - 1,  x_temp)
++    c_word_embedding = concatenate([tparams['Wemb'], unk_ctx_emb], axis=0)
++    emb = c_word_embedding[cmb_x_vector[:]];
+     emb = emb.reshape([n_timesteps, n_samples, options['dim_word_src']])
+-    embr = tparams['Wemb'][xr.flatten()]
++
++    cmb_x_vectorr = cmb_x_vector[::-1]
++    embr = c_word_embedding[cmb_x_vectorr[:]];
+     embr = embr.reshape([n_timesteps, n_samples, options['dim_word_src']])
+ 
+     # encoder
+@@ -279,11 +383,12 @@ def build_sampler(tparams, options, trng):
+                                     ctx_mean,
+                                     options,
+                                     prefix='ff_state',
+-                                    activ=tensor.tanh)
++                                    activ='tanh')
+ 
+-    LOGGER.info('Building f_init')
++    print 'Building f_init...'
+     outs = [init_state, ctx]
+-    f_init = theano.function([x], outs, name='f_init', profile=False)
++    f_init = theano.function([x, unk_ctx], outs, name='f_init', profile=profile)
++    print 'Done'
+ 
+     # x: 1 x 1
+     y = tensor.vector('y_sampler', dtype='int64')
+@@ -313,23 +418,23 @@ def build_sampler(tparams, options, trng):
+                                     next_state,
+                                     options,
+                                     prefix='ff_logit_lstm',
+-                                    activ=None)
++                                    activ='linear')
+     logit_prev = get_layer('ff')[1](tparams,
+                                     emb,
+                                     options,
+                                     prefix='ff_logit_prev',
+-                                    activ=None)
++                                    activ='linear')
+     logit_ctx = get_layer('ff')[1](tparams,
+                                    ctxs,
+                                    options,
+                                    prefix='ff_logit_ctx',
+-                                   activ=None)
++                                   activ='linear')
+     logit = tensor.tanh(logit_lstm + logit_prev + logit_ctx)
+     logit = get_layer('ff')[1](tparams,
+                                logit,
+                                options,
+                                prefix='ff_logit',
+-                               activ=None)
++                               activ='linear')
+ 
+     # compute the softmax probability
+     next_probs = tensor.nnet.softmax(logit)
+@@ -339,17 +444,42 @@ def build_sampler(tparams, options, trng):
+ 
+     # compile a function to do the whole thing above, next word probability,
+     # sampled word for the next target, next hidden state to be used
+-    LOGGER.info('Building f_next')
++    print 'Building f_next..'
+     inps = [y, ctx, init_state]
+     outs = [next_probs, next_sample, next_state]
+-    f_next = theano.function(inps, outs, name='f_next', profile=False)
++    f_next = theano.function(inps, outs, name='f_next', profile=profile)
++    print 'Done'
+ 
+     return f_init, f_next
+ 
+ 
++def get_minibatches_idx(n, minibatch_size, shuffle=False):
++    """
++    Used to shuffle the dataset at each iteration.
++    """
++
++    idx_list = numpy.arange(n, dtype="int32")
++
++    if shuffle:
++        numpy.random.shuffle(idx_list)
++
++    minibatches = []
++    minibatch_start = 0
++    for i in range(n // minibatch_size):
++        minibatches.append(idx_list[minibatch_start:
++                                    minibatch_start + minibatch_size])
++        minibatch_start += minibatch_size
++
++    if (minibatch_start != n):
++        # Make a minibatch out of what is left
++        minibatches.append(idx_list[minibatch_start:])
++
++    return zip(range(len(minibatches)), minibatches)
++
+ # generate sample, either with stochastic sampling or beam search. Note that,
+ # this function iteratively calls f_init and f_next functions.
+-def gen_sample(tparams,
++def gen_sample(ctx_len_emb,
++	       tparams,
+                f_init,
+                f_next,
+                x,
+@@ -378,7 +508,8 @@ def gen_sample(tparams,
+     hyp_states = []
+ 
+     # get initial state of decoder rnn and encoder context
+-    ret = f_init(x)
++    unk_ctx = get_ctx_matrix(x, ctx_len_emb)
++    ret = f_init(x, unk_ctx)
+     next_state, ctx0 = ret[0], ret[1]
+     next_w = -1 * numpy.ones((1, )).astype('int64')  # bos indicator
+ 
+@@ -453,36 +584,37 @@ def gen_sample(tparams,
+     return sample, sample_score
+ 
+ 
++
+ # calculate the log probablities on a given corpus using translation model
+-def pred_probs(f_log_probs, options, stream):
+-    probs = []
++# def pred_probs(f_log_probs, prepare_data, ctx_len_emb ,options, stream):
+ 
++def pred_probs(f_log_probs, ctx_len_emb ,options, stream):
++    probs = []
+     n_done = 0
+ 
+     for x, x_mask, y, y_mask in stream.get_epoch_iterator():
+-        n_done += len(x)
+-
+-        x, x_mask, y, y_mask = x.T, x_mask.T, y.T, y_mask.T
+-
+-        pprobs = f_log_probs(x, x_mask, y, y_mask)
++	n_done += len(x.T)
++        unk_ctx = get_ctx_matrix(x.T, ctx_len_emb)
++        pprobs = f_log_probs(x.T, x_mask.T, y.T, y_mask.T, unk_ctx)
+         for pp in pprobs:
+             probs.append(pp)
+ 
+-        if not numpy.isfinite(numpy.mean(probs)):
++        if numpy.isnan(numpy.mean(probs)):
++            ipdb.set_trace()
++
++	if not numpy.isfinite(numpy.mean(probs)):
+             raise RuntimeError('non-finite probabilities')
+ 
+     return numpy.array(probs)
+ 
+-
+ def save_params(params, filename, symlink=None):
+     """Save the parameters.
+-
+     Saves the parameters as an ``.npz`` file. It optionally also creates a
+     symlink to this archive.
+-
+     """
+     numpy.savez(filename, **params)
+     if symlink:
+         if os.path.lexists(symlink):
+             os.remove(symlink)
+         os.symlink(filename, symlink)
++
+diff --git a/nmt_controller.py b/nmt_controller.py
+index 340f9c7..043697f 100644
+--- a/nmt_controller.py
++++ b/nmt_controller.py
+@@ -2,48 +2,44 @@ from __future__ import print_function
+ import binascii
+ import io
+ import json
+-import logging
+ import os
+ import shutil
+-import signal
+ import sys
++import logging
++import signal
+ from multiprocessing import Process
+ 
+ import numpy
+ from mimir import ServerLogger
+ from platoon.channel import Controller
+ 
+-from nmt_base import load_data
+-
+ logging.basicConfig(level=logging.INFO,
+-                    format='%(asctime)s:%(levelname)s:%(name)s:%(message)s')
++                            format='%(asctime)s:%(levelname)s:%(name)s:%(message)s')
+ LOGGER = logging.getLogger(__name__)
+-
++from nmt_base import load_data
+ 
+ class NMTController(Controller):
+     """
+     This multi-process controller implements patience-based early-stopping SGD
+     """
+ 
+-    def __init__(self, experiment_id, config, num_workers):
++    def __init__(self, experiment_id, config,  num_workers):
+         """
+         Initialize the NMTController
+-
+         Parameters
+         ----------
+         experiment_id : str
+             A string that uniquely identifies this run.
+         config : dict
+-            The deserialized JSON configuration file
++            The deserialized JSON configuration file.
+         num_workers : int
+             The number of workers (GPUs), used to calculate the alpha
+             parameter for EASGD.
+-
+         """
+         self.beta = config['multi'].pop('beta')
+         self.config = config
+         LOGGER.info('Setting up controller ({})'
+-                    .format(config['multi']['control_port']))
++                            .format(config['multi']['control_port']))
+         super(NMTController, self).__init__(config['multi']['control_port'])
+         self.patience = config['training']['patience']
+         self.max_mb = config['training']['finish_after']
+@@ -56,8 +52,8 @@ class NMTController(Controller):
+         self.valid = False
+         self._stop = False
+ 
+-        signal.signal(signal.SIGTERM, self.stop)
+-        signal.signal(signal.SIGINT, self.stop)
++#        signal.signal(signal.SIGTERM, self.stop)
++#        signal.signal(signal.SIGINT, self.stop)
+ 
+         self.experiment_id = experiment_id
+         ServerLogger(filename='{}.log.jsonl.gz'.format(self.experiment_id),
+@@ -65,26 +61,18 @@ class NMTController(Controller):
+ 
+         self.num_workers = num_workers
+ 
+-    def stop(self, signum, frame):
+-        print('Received signal {}'.format(signum))
+-        self._stop = True
+-        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+-        signal.signal(signal.SIGINT, signal.SIG_DFL)
+ 
+     def start_batch_server(self):
+         self.p = Process(target=self._send_mb,
+-                         args=(self.config['multi']['batch_port'],))
++                args=(self.config['multi']['batch_port'],))
+         self.p.daemon = True
+         self.p.start()
+ 
+     def _send_mb(self, batch_port):
+         LOGGER.info('Loading training data stream')
+         _, train_stream, _ = load_data(**self.config['data'])
+-
+-        LOGGER.info('Connecting to socket ({})'
+-                    .format(batch_port))
++        LOGGER.info('Connecting to socket ({})'.format(batch_port))
+         self.init_data(batch_port)
+-
+         while True:
+             LOGGER.info('Start new epoch sending batches')
+             for x, x_mask, y, y_mask in train_stream.get_epoch_iterator():
+@@ -95,7 +83,6 @@ class NMTController(Controller):
+     def handle_control(self, req, worker_id):
+         """
+         Handles a control_request received from a worker
+-
+         Parameters
+         ----------
+         req : str or dict
+@@ -147,8 +134,7 @@ class NMTController(Controller):
+             else:
+                 self.bad_counter += 1
+ 
+-        if (self._stop or self.uidx > self.max_mb or
+-                self.bad_counter > self.patience):
++        if self.uidx > self.max_mb or self.bad_counter > self.patience:
+             control_response = 'stop'
+             self.worker_is_done(worker_id)
+ 
+diff --git a/nmt_single.py b/nmt_single.py
+deleted file mode 100644
+index efba2b7..0000000
+--- a/nmt_single.py
++++ /dev/null
+@@ -1,272 +0,0 @@
+-import binascii
+-import copy
+-import io
+-import json
+-import logging
+-import os
+-import shutil
+-import sys
+-import time
+-
+-import numpy
+-import six
+-import theano
+-from mimir import Logger
+-from theano import tensor
+-from six.moves import xrange
+-from toolz.dicttoolz import merge
+-
+-from data_iterator import UNK_TOKEN
+-from nmt_base import (pred_probs, build_model, save_params,
+-                      build_sampler, init_params, gen_sample, load_data)
+-from utils import load_params, init_tparams, zipp, unzip, itemlist
+-import optimizers
+-
+-logging.basicConfig(level=logging.INFO)
+-LOGGER = logging.getLogger(__name__)
+-
+-
+-def train(experiment_id, model_options, data_options,
+-          patience,  # early stopping patience
+-          max_epochs,
+-          finish_after,  # finish after this many updates
+-          decay_c,  # L2 regularization penalty
+-          alpha_c,  # alignment regularization
+-          clip_c,  # gradient clipping threshold
+-          lrate,  # learning rate
+-          optimizer,
+-          saveto,
+-          valid_freq,
+-          save_freq,   # save the parameters after every saveFreq updates
+-          sample_freq,   # generate some samples after every sampleFreq
+-          reload_=False):
+-
+-    worddicts_r, train_stream, valid_stream = load_data(**data_options)
+-
+-    LOGGER.info('Building model')
+-    params = init_params(model_options)
+-    # reload parameters
+-    model_filename = '{}.model.npz'.format(experiment_id)
+-    saveto_filename = '{}.npz'.format(saveto)
+-    if reload_ and os.path.exists(saveto_filename):
+-        LOGGER.info('Loading parameters from {}'.format(saveto_filename))
+-        params = load_params(saveto_filename, params)
+-
+-    LOGGER.info('Initializing parameters')
+-    tparams = init_tparams(params)
+-
+-    # use_noise is for dropout
+-    trng, use_noise, \
+-        x, x_mask, y, y_mask, \
+-        opt_ret, \
+-        cost = \
+-        build_model(tparams, model_options)
+-    inps = [x, x_mask, y, y_mask]
+-
+-    LOGGER.info('Building sampler')
+-    f_init, f_next = build_sampler(tparams, model_options, trng)
+-
+-    # before any regularizer
+-    LOGGER.info('Building f_log_probs')
+-    f_log_probs = theano.function(inps, cost, profile=False)
+-
+-    cost = cost.mean()
+-
+-    # apply L2 regularization on weights
+-    if decay_c > 0.:
+-        decay_c = theano.shared(numpy.float32(decay_c), name='decay_c')
+-        weight_decay = 0.
+-        for kk, vv in six.iteritems(tparams):
+-            weight_decay += (vv ** 2).sum()
+-        weight_decay *= decay_c
+-        cost += weight_decay
+-
+-    # regularize the alpha weights
+-    if alpha_c > 0. and not model_options['decoder'].endswith('simple'):
+-        alpha_c = theano.shared(numpy.float32(alpha_c), name='alpha_c')
+-        alpha_reg = alpha_c * ((tensor.cast(
+-            y_mask.sum(0) // x_mask.sum(0), 'float32')[:, None] -
+-            opt_ret['dec_alphas'].sum(0)) ** 2).sum(1).mean()
+-        cost += alpha_reg
+-
+-    # Not used?
+-    # after all regularizers - compile the computational graph for cost
+-    # LOGGER.info('Building f_cost')
+-    # f_cost = theano.function(inps, cost, profile=False)
+-
+-    LOGGER.info('Computing gradient')
+-    grads = tensor.grad(cost, wrt=itemlist(tparams))
+-
+-    # apply gradient clipping here
+-    if clip_c > 0.:
+-        g2 = 0.
+-        for g in grads:
+-            g2 += (g ** 2).sum()
+-        new_grads = []
+-        for g in grads:
+-            new_grads.append(tensor.switch(g2 > (clip_c ** 2), g / tensor.sqrt(
+-                g2) * clip_c, g))
+-        grads = new_grads
+-
+-    # compile the optimizer, the actual computational graph is compiled here
+-    lr = tensor.scalar(name='lr')
+-    LOGGER.info('Building optimizers')
+-    f_grad_shared, f_update = getattr(optimizers, optimizer)(lr, tparams,
+-                                                             grads, inps, cost)
+-
+-    LOGGER.info('Optimization')
+-
+-    log = Logger(filename='{}.log.jsonl.gz'.format(experiment_id))
+-    train_start = time.clock()
+-    best_p = None
+-    min_valid_cost = numpy.inf
+-    bad_counter = 0
+-
+-    uidx = 0
+-    estop = False
+-    for eidx in xrange(max_epochs):
+-        n_samples = 0
+-
+-        for x, x_mask, y, y_mask in train_stream.get_epoch_iterator():
+-            n_samples += len(x)
+-            x, x_mask, y, y_mask = x.T, x_mask.T, y.T, y_mask.T
+-
+-            use_noise.set_value(1.)
+-
+-            uidx += 1
+-            log_entry = {'iteration': uidx, 'epoch': eidx}
+-
+-            # compute cost, grads and copy grads to shared variables
+-            update_start = time.clock()
+-            cost = f_grad_shared(x, x_mask, y, y_mask)
+-            f_update(lrate)
+-
+-            log_entry['cost'] = float(cost)
+-            log_entry['average_source_length'] = float(x_mask.sum(0).mean())
+-            log_entry['average_target_length'] = float(y_mask.sum(0).mean())
+-            log_entry['update_time'] = time.clock() - update_start
+-            log_entry['train_time'] = time.clock() - train_start
+-
+-            # check for bad numbers, usually we remove non-finite elements
+-            # and continue training - but not done here
+-            if not numpy.isfinite(cost):
+-                LOGGER.error('NaN detected')
+-                return 1., 1., 1.
+-
+-            # save the best model so far
+-            if numpy.mod(uidx, save_freq) == 0:
+-                LOGGER.info('Saving best model so far')
+-
+-                if best_p is not None:
+-                    params = best_p
+-                else:
+-                    params = unzip(tparams)
+-
+-                # save params to exp_id.npz and symlink model.npz to it
+-                save_params(params, model_filename, saveto_filename)
+-
+-            # generate some samples with the model and display them
+-            if numpy.mod(uidx, sample_freq) == 0:
+-                # FIXME: random selection?
+-                log_entry['samples'] = []
+-                for jj in xrange(numpy.minimum(5, x.shape[1])):
+-                    log_entry['samples'].append({'source': '', 'truth': '',
+-                                                 'sample': ''})
+-                    stochastic = True
+-                    sample, score = gen_sample(tparams,
+-                                               f_init,
+-                                               f_next,
+-                                               x[:, jj][:, None],
+-                                               model_options,
+-                                               trng=trng,
+-                                               k=1,
+-                                               maxlen=30,
+-                                               stochastic=stochastic,
+-                                               argmax=False)
+-                    for vv in x[:, jj]:
+-                        if vv == 0:
+-                            break
+-                        if vv in worddicts_r[0]:
+-                            token = worddicts_r[0][vv]
+-                        else:
+-                            token = UNK_TOKEN
+-                        log_entry['samples'][-1]['source'] += token + ' '
+-                    for vv in y[:, jj]:
+-                        if vv == 0:
+-                            break
+-                        if vv in worddicts_r[1]:
+-                            token = worddicts_r[1][vv]
+-                        else:
+-                            token = UNK_TOKEN
+-                        log_entry['samples'][-1]['truth'] += token + ' '
+-                    if stochastic:
+-                        ss = sample
+-                    else:
+-                        score = score / numpy.array([len(s) for s in sample])
+-                        ss = sample[score.argmin()]
+-                    for vv in ss:
+-                        if vv == 0:
+-                            break
+-                        if vv in worddicts_r[1]:
+-                            token = worddicts_r[1][vv]
+-                        else:
+-                            token = UNK_TOKEN
+-                        log_entry['samples'][-1]['sample'] += token + ' '
+-
+-            # validate model on validation set and early stop if necessary
+-            if numpy.mod(uidx, valid_freq) == 0:
+-                use_noise.set_value(0.)
+-                valid_errs = pred_probs(f_log_probs,
+-                                        model_options, valid_stream)
+-                valid_err = valid_errs.mean()
+-                log_entry['validation_cost'] = float(valid_err)
+-
+-                if valid_err <= min_valid_cost:
+-                    min_valid_cost = valid_err
+-                    best_p = unzip(tparams)
+-                    bad_counter = 0
+-                else:
+-                    bad_counter += 1
+-                    if bad_counter > patience:
+-                        estop = True
+-                        break
+-
+-                if not numpy.isfinite(valid_err):
+-                    raise RuntimeError('NaN detected in validation error')
+-
+-            # finish after this many updates
+-            if uidx >= finish_after:
+-                LOGGER.info('Finishing after {} iterations'.format(uidx))
+-                estop = True
+-                break
+-
+-            log.log(log_entry)
+-
+-        LOGGER.info('Completed epoch, seen {} samples'.format(n_samples))
+-
+-        if estop:
+-            log.log(log_entry)
+-            break
+-
+-    if best_p is not None:
+-        zipp(best_p, tparams)
+-
+-    use_noise.set_value(0.)
+-    LOGGER.info('Calculating validation cost')
+-    valid_err = pred_probs(f_log_probs, model_options,
+-                           valid_stream).mean()
+-
+-    params = copy.copy(best_p)
+-    save_params(params, model_filename, saveto_filename)
+-
+-    return valid_err
+-
+-if __name__ == "__main__":
+-    # Load the configuration file
+-    with io.open(sys.argv[1]) as f:
+-        config = json.load(f)
+-    # Create unique experiment ID and backup config file
+-    experiment_id = binascii.hexlify(os.urandom(3)).decode()
+-    shutil.copyfile(sys.argv[1], '{}.config.json'.format(experiment_id))
+-    train(experiment_id, config['model'], config['data'],
+-          **merge(config['training'], config['management']))
+diff --git a/nmt_worker.py b/nmt_worker.py
+index 3983db1..43cabf2 100644
+--- a/nmt_worker.py
++++ b/nmt_worker.py
+@@ -2,7 +2,6 @@ from __future__ import print_function
+ 
+ import logging
+ import os
+-import sys
+ import time
+ 
+ import numpy
+@@ -10,7 +9,7 @@ import six
+ import theano
+ from mimir import RemoteLogger
+ from platoon.channel import Worker
+-from platoon.param_sync import EASGD
++from platoon.param_sync import ASGD
+ from six.moves import xrange
+ from theano import tensor
+ from toolz.dicttoolz import merge
+@@ -18,10 +17,11 @@ from toolz.dicttoolz import merge
+ import optimizers
+ from nmt_base import (init_params, build_model, build_sampler, save_params,
+                       pred_probs, load_data)
+-from utils import unzip, init_tparams, load_params, itemlist
++from utils import unzip, init_tparams, load_params, itemlist, get_ctx_matrix
+ 
+ logging.basicConfig(level=logging.INFO,
+-                    format='%(asctime)s:%(levelname)s:%(name)s:%(message)s')
++                            format='%(asctime)s:%(levelname)s:%(name)s:%(message)s')
++
+ LOGGER = logging.getLogger(__name__)
+ 
+ 
+@@ -45,8 +45,8 @@ def train(worker, model_options, data_options,
+           log_port,
+           reload_):
+ 
+-    LOGGER.info('Connecting to data socket ({}) and loading validation data'
+-                .format(batch_port))
++    ctx_len_emb = 5
++    LOGGER.info('Connecting to data socket and loading validation data')
+     worker.init_mb_sock(batch_port)
+     _, _, valid_stream = load_data(**data_options)
+ 
+@@ -63,15 +63,18 @@ def train(worker, model_options, data_options,
+     LOGGER.info('Initializing parameters')
+     tparams = init_tparams(params)
+     alpha = worker.send_req('alpha')
+-    worker.init_shared_params(tparams.values(), param_sync_rule=EASGD(alpha))
++    worker.init_shared_params(tparams.values(), param_sync_rule=ASGD())
+ 
+     # use_noise is for dropout
++
+     trng, use_noise, \
+         x, x_mask, y, y_mask, \
+         opt_ret, \
+-        cost = \
++        cost, \
++        unk_ctx = \
+         build_model(tparams, model_options)
+-    inps = [x, x_mask, y, y_mask]
++
++    inps = [x, x_mask, y, y_mask, unk_ctx]
+ 
+     LOGGER.info('Building sampler')
+     f_init, f_next = build_sampler(tparams, model_options, trng)
+@@ -136,18 +139,26 @@ def train(worker, model_options, data_options,
+     uidx = 0
+     while True:
+         step = worker.send_req('next')
+-        LOGGER.debug('Received command: {}'.format(step))
++        LOGGER.info('Received command: {}'.format(step))
+         if step == 'train':
+             use_noise.set_value(1.)
+             for i in xrange(train_len):
+                 x, x_mask, y, y_mask = worker.recv_mb()
+-
++		if x is None:
++			continue
++		if len(x) == 0:
++			continue
++		unk_ctx = get_ctx_matrix(x, ctx_len_emb)
++		if unk_ctx is None:
++			continue
++		if len(unk_ctx) == 0:
++			continue
+                 uidx += 1
+                 log_entry = {'iteration': uidx}
+ 
+                 # compute cost, grads and copy grads to shared variables
+                 update_start = time.clock()
+-                cost = f_grad_shared(x, x_mask, y, y_mask)
++                cost = f_grad_shared(x, x_mask, y, y_mask, unk_ctx)
+                 f_update(lrate)
+ 
+                 log_entry['cost'] = float(cost)
+@@ -161,14 +172,14 @@ def train(worker, model_options, data_options,
+                 log.log(log_entry)
+ 
+             step = worker.send_req({'done': train_len})
+-            LOGGER.debug("Syncing with global params")
++            LOGGER.info("Syncing with global params")
+             worker.sync_params(synchronous=True)
+ 
+         if step == 'valid':
+             if valid_sync:
+                 worker.copy_to_local()
+             use_noise.set_value(0.)
+-            valid_errs = pred_probs(f_log_probs, model_options, valid_stream)
++            valid_errs = pred_probs(f_log_probs, ctx_len_emb, model_options, valid_stream)
+             valid_err = float(valid_errs.mean())
+             res = worker.send_req({'valid_err': valid_err})
+             log.log({'validation_cost': valid_err,
+@@ -188,10 +199,13 @@ def train(worker, model_options, data_options,
+     # Release all shared ressources.
+     worker.close()
+ 
++    LOGGER.info('Saving')
++
++
+ 
+ if __name__ == "__main__":
+-    LOGGER.info('Connecting to worker ({})'.format(sys.argv[1]))
+-    worker = Worker(int(sys.argv[1]))
++    LOGGER.info('Connecting to worker')
++    worker = Worker(control_port=5567)
+     LOGGER.info('Retrieving configuration')
+     config = worker.send_req('config')
+     train(worker, config['model'], config['data'],
+diff --git a/optimizers.py b/optimizers.py
+index c36ded9..0fadf00 100644
+--- a/optimizers.py
++++ b/optimizers.py
+@@ -4,18 +4,25 @@ from theano import tensor
+ import numpy as np
+ 
+ import six
+-from utils import itemlist
++
++from utils import (
++    itemlist,
++)
++
++
++import settings
++profile = settings.profile
+ 
+ 
+-# optimizers
+ # name(hyperp, tparams, grads, inputs (list), cost) = f_grad_shared, f_update
++
+ def adam(lr, tparams, grads, inp, cost):
+     gshared = [theano.shared(p.get_value() * 0.,
+                              name='%s_grad' % k)
+                for k, p in six.iteritems(tparams)]
+     gsup = [(gs, g) for gs, g in zip(gshared, grads)]
+ 
+-    f_grad_shared = theano.function(inp, cost, updates=gsup, name='adam')
++    f_grad_shared = theano.function(inp, cost, updates=gsup, profile=profile)
+ 
+     lr0 = 0.0002
+     b1 = 0.1
+@@ -26,8 +33,8 @@ def adam(lr, tparams, grads, inp, cost):
+ 
+     i = theano.shared(np.float32(0.))
+     i_t = i + 1.
+-    fix1 = 1. - b1 ** (i_t)
+-    fix2 = 1. - b2 ** (i_t)
++    fix1 = 1. - b1**(i_t)
++    fix2 = 1. - b2**(i_t)
+     lr_t = lr0 * (tensor.sqrt(fix2) / fix1)
+ 
+     for p, g in zip(tparams.values(), gshared):
+@@ -45,7 +52,8 @@ def adam(lr, tparams, grads, inp, cost):
+     f_update = theano.function([lr],
+                                [],
+                                updates=updates,
+-                               on_unused_input='ignore')
++                               on_unused_input='ignore',
++                               profile=profile)
+ 
+     return f_grad_shared, f_update
+ 
+@@ -62,25 +70,26 @@ def adadelta(lr, tparams, grads, inp, cost):
+                       for k, p in six.iteritems(tparams)]
+ 
+     zgup = [(zg, g) for zg, g in zip(zipped_grads, grads)]
+-    rg2up = [(rg2, 0.95 * rg2 + 0.05 * (g ** 2))
++    rg2up = [(rg2, 0.95 * rg2 + 0.05 * (g**2))
+              for rg2, g in zip(running_grads2, grads)]
+ 
+     f_grad_shared = theano.function(inp,
+                                     cost,
+                                     updates=zgup + rg2up,
+-                                    name='adadelta')
++                                    profile=profile)
+ 
+     updir = [-tensor.sqrt(ru2 + 1e-6) / tensor.sqrt(rg2 + 1e-6) * zg
+              for zg, ru2, rg2 in zip(zipped_grads, running_up2, running_grads2)
+              ]
+-    ru2up = [(ru2, 0.95 * ru2 + 0.05 * (ud ** 2))
++    ru2up = [(ru2, 0.95 * ru2 + 0.05 * (ud**2))
+              for ru2, ud in zip(running_up2, updir)]
+     param_up = [(p, p + ud) for p, ud in zip(itemlist(tparams), updir)]
+ 
+     f_update = theano.function([lr],
+                                [],
+                                updates=ru2up + param_up,
+-                               on_unused_input='ignore')
++                               on_unused_input='ignore',
++                               profile=profile)
+ 
+     return f_grad_shared, f_update
+ 
+@@ -98,18 +107,18 @@ def rmsprop(lr, tparams, grads, inp, cost):
+ 
+     zgup = [(zg, g) for zg, g in zip(zipped_grads, grads)]
+     rgup = [(rg, 0.95 * rg + 0.05 * g) for rg, g in zip(running_grads, grads)]
+-    rg2up = [(rg2, 0.95 * rg2 + 0.05 * (g ** 2))
++    rg2up = [(rg2, 0.95 * rg2 + 0.05 * (g**2))
+              for rg2, g in zip(running_grads2, grads)]
+ 
+     f_grad_shared = theano.function(inp,
+                                     cost,
+                                     updates=zgup + rgup + rg2up,
+-                                    name='rmsprop')
++                                    profile=profile)
+ 
+     updir = [theano.shared(p.get_value() * np.float32(0.),
+                            name='%s_updir' % k)
+              for k, p in six.iteritems(tparams)]
+-    updir_new = [(ud, 0.9 * ud - 1e-4 * zg / tensor.sqrt(rg2 - rg ** 2 + 1e-4))
++    updir_new = [(ud, 0.9 * ud - 1e-4 * zg / tensor.sqrt(rg2 - rg**2 + 1e-4))
+                  for ud, zg, rg, rg2 in zip(updir, zipped_grads, running_grads,
+                                             running_grads2)]
+     param_up = [(p, p + udn[1]) for p, udn in zip(
+@@ -117,7 +126,8 @@ def rmsprop(lr, tparams, grads, inp, cost):
+     f_update = theano.function([lr],
+                                [],
+                                updates=updir_new + param_up,
+-                               on_unused_input='ignore')
++                               on_unused_input='ignore',
++                               profile=profile)
+ 
+     return f_grad_shared, f_update
+ 
+@@ -132,9 +142,9 @@ def sgd(lr, tparams, grads, x, mask, y, cost):
+         [x, mask, y],
+         cost,
+         updates=gsup,
+-        name='sgd')
++        profile=profile)
+ 
+     pup = [(p, p - lr * g) for p, g in zip(itemlist(tparams), gshared)]
+-    f_update = theano.function([lr], [], updates=pup)
++    f_update = theano.function([lr], [], updates=pup, profile=profile)
+ 
+     return f_grad_shared, f_update
+diff --git a/requirements.txt b/requirements.txt
+index 4142ebd..3930480 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,2 +1 @@
+-nose2
+ flake8
+diff --git a/settings.py b/settings.py
+new file mode 100644
+index 0000000..c56842a
+--- /dev/null
++++ b/settings.py
+@@ -0,0 +1 @@
++profile = False
+diff --git a/train_nmt.py b/train_nmt.py
+new file mode 100644
+index 0000000..130b151
+--- /dev/null
++++ b/train_nmt.py
+@@ -0,0 +1,60 @@
++from __future__ import print_function
++import os
++
++from nmt import train
++
++
++def main(job_id, params):
++    print(params)
++    validerr = train(
++        saveto=params['model'][0],
++        reload_=params['reload'][0],
++        dim_word_src=params['dim_word_src'][0],
++        dim_word_trg=params['dim_word_trg'][0],
++        dim=params['dim'][0],
++        n_words=params['trg_vocab_size'][0],
++        n_words_src=params['src_vocab_size'][0],
++        decay_c=params['decay-c'][0],
++        clip_c=params['clip-c'][0],
++        lrate=params['learning-rate'][0],
++        optimizer=params['optimizer'][0],
++        maxlen=50,
++        batch_size=80,
++        valid_batch_size=80,
++        datasets=[
++            ('/home/%s/data/mt/'
++             'wmt16.de-en.tok.true.clean.shuf.en' % os.environ['USER']),
++            ('/home/%s/data/mt/'
++             'wmt16.de-en.tok.true.clean.shuf.de' % os.environ['USER'])
++        ],
++        valid_datasets=[
++            '/home/%s/data/mt/newstest2011.en.tok' % os.environ['USER'],
++            '/home/%s/data/mt/newstest2011.fr.tok' % os.environ['USER']
++        ],
++        dictionaries=[('/home/%s/data/mt/'
++                       'wmt16.de-en.vocab.en' % os.environ['USER']),
++                      ('/home/%s/data/mt/'
++                       'wmt16.de-en.vocab.de' % os.environ['USER'])],
++        validFreq=5000,
++        dispFreq=500,
++        saveFreq=5000,
++        sampleFreq=1000,
++        use_dropout=params['use-dropout'][0])
++    return validerr
++
++
++if __name__ == '__main__':
++    main(0, {
++        'model': ['model_hal.npz'],
++        'dim_word_src': [512],
++        'dim_word_trg': [512],
++        'dim': [1024],
++        'src_vocab_size': [30000],
++        'trg_vocab_size': [30000],
++        'optimizer': ['adadelta'],
++        'decay-c': [0.],
++        'clip-c': [1.],
++        'use-dropout': [False],
++        'learning-rate': [0.0001],
++        'reload': [False]
++    })
+diff --git a/utils.py b/utils.py
+index 1e2a74d..eeb9a89 100644
+--- a/utils.py
++++ b/utils.py
+@@ -8,6 +8,71 @@ import numpy
+ import inspect
+ from collections import OrderedDict
+ 
++def contextwin(l, win):
++    '''
++    win :: int corresponding to the size of the window
++    given a list of indexes composing a sentence
++
++    l :: array containing the word indexes
++
++    it will return a list of list of indexes corresponding
++    to context windows surrounding each word in the sentence
++    '''
++    assert (win % 2) == 1
++    assert win >= 1
++    l = list(l)
++
++    lpadded = win // 2 * [0] + l + win // 2 * [0]
++    out = [lpadded[i:(i + win)] for i in range(len(l)) if l[i]==1]
++
++    #This condition not necessery, we worry only for UNKs
++    #assert len(out) == len(l)
++    return out
++
++def getmaskwin(l, mask_element):
++    '''
++    mask_element :: element which you want to check
++    l :: array containing the word indexes
++
++    or can also use, np.where(list == mask_element)
++    enumerate is probably efficient.
++
++    '''
++    assert (mask_element) == 1
++    assert len(l) >= 1
++    l = list(l)
++    masked_list = numpy.zeros(len(l))
++    indices = [i for i, x in enumerate(l) if x == mask_element]
++    masked_list[indices[:]] = mask_element;
++    assert len(masked_list) == len(l)
++    return masked_list
++
++def get_ctx_matrix(x_data, context_len):
++        x_temp = x_data.transpose()
++        unk_ctx = numpy.array([])
++        count = 0
++        for i in range(len(x_temp)):
++                outa  = contextwin(x_temp[i], context_len);
++                if outa:
++                        if count == 0:
++                                unk_ctx = outa;
++                        else:
++                                unk_ctx = numpy.append(unk_ctx, outa, axis = 0)
++                        count = count + 1;
++
++        return unk_ctx;
++
++
++def get_mask_matrix(x_data, mask_element):
++
++    x_data = x_data.transpose()
++    assert len(x_data) >= 1
++    mask_emb = [getmaskwin(x_data[i], mask_element) for i in range(len(x_data))];
++    mask_emb = numpy.vstack(mask_emb[:])
++    mask_emb = mask_emb.transpose()
++    return mask_emb
++
++
+ 
+ # push parameters to Theano shared variables
+ def zipp(params, tparams):
