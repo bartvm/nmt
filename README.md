@@ -109,6 +109,6 @@ shuffle wmt16.de-en.tok.true.clean
 Count the words and create a vocabulary.
 
 ```bash
-create-vocabulary wmt16.de-en.tok.true.clean.shuf.en
-create-vocabulary wmt16.de-en.tok.true.clean.shuf.de
+create-vocabulary wmt16.de-en.tok.true.clean.shuf.en > wmt16.de-en.vocab.en
+create-vocabulary wmt16.de-en.tok.true.clean.shuf.de > wmt16.de-en.vocab.de
 ```
