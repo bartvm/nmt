@@ -8,6 +8,11 @@ function check_moses {
 function check_langs {
   : "${LANG1:?Need to set LANG1}"
   : "${LANG2:?Need to set LANG2}"
+  if [[ "$LANG1" == "$LANG2" ]]
+  then
+    echo "LANG1 and LANG2 cannot be the same"
+    return 1
+  fi
 }
 
 function min {
@@ -27,12 +32,18 @@ function tokenize {
 }
 
 function truecase {
-  [ $# -lt 1 ] && { echo "Usage: $0 filename"; return 1; }
+  [ $# -lt 1 ] && { echo "Usage: $0 filename [truecase-model]"; return 1; }
   check_moses
   base="${1%.*}"
   lang="${1##*.}"
-  $MOSES/scripts/recaser/train-truecaser.perl --model truecase-model.$lang --corpus $1
-  $MOSES/scripts/recaser/truecase.perl --model truecase-model.$lang < $1 > $base.true.$lang
+  if [[ -z "$2" ]]
+  then
+    model="${base%.*}.truecase-model.$lang"
+    $MOSES/scripts/recaser/train-truecaser.perl --model $model --corpus $1
+  else
+    model="$2"
+  fi
+  $MOSES/scripts/recaser/truecase.perl --model $model < $1 > $base.true.$lang
 }
 
 function clean {

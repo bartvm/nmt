@@ -112,3 +112,10 @@ Count the words and create a vocabulary.
 create-vocabulary wmt16.de-en.tok.true.clean.shuf.en > wmt16.de-en.vocab.en
 create-vocabulary wmt16.de-en.tok.true.clean.shuf.de > wmt16.de-en.vocab.de
 ```
+
+Truecase the validation sets use the model trained on the parallel data.
+
+```bash
+truecase newstest2013.de wmt16.de-en.truecase-model.de
+truecase newstest2013.en wmt16.de-en.truecase-model.en
+```
