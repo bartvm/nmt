@@ -22,7 +22,8 @@
     "valid_freq": 5000,
     "saveto": "model",
     "reload_": true,
-    "save_freq": 5000
+    "save_freq": 5000,
+    "overwrite": true
   },
   "data": {
     "src": "train/wmt16.de-en.tok.true.clean.shuf.en",

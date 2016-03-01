@@ -474,13 +474,19 @@ def pred_probs(f_log_probs, options, stream):
     return numpy.array(probs)
 
 
-def save_params(params, filename, symlink=None):
+def save_params(params, experiment_id, symlink=None, iter_num=None):
     """Save the parameters.
 
     Saves the parameters as an ``.npz`` file. It optionally also creates a
     symlink to this archive.
 
     """
+
+    if iter_num and type(iter_num) is int:
+        filename = '{}.model.iter_{}.npz'.format(experiment_id, iter_num)
+    else:
+        filename = '{}.model.npz'.format(experiment_id)
+
     numpy.savez(filename, **params)
     if symlink:
         if os.path.lexists(symlink):

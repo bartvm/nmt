@@ -39,6 +39,7 @@ def train(worker, model_options, data_options,
           train_len,
           valid_sync,
           save_freq,   # save the parameters after every saveFreq updates
+          overwrite,   # overwrite the previous best model
           sample_freq,   # generate some samples after every sampleFreq
           control_port,
           batch_port,
@@ -54,7 +55,6 @@ def train(worker, model_options, data_options,
     params = init_params(model_options)
     # reload parameters
     experiment_id = worker.send_req('experiment_id')
-    model_filename = '{}.model.npz'.format(experiment_id)
     saveto_filename = '{}.npz'.format(saveto)
     if reload_ and os.path.exists(saveto_filename):
         LOGGER.info('Loading parameters from {}'.format(saveto_filename))
@@ -177,7 +177,10 @@ def train(worker, model_options, data_options,
 
             if res == 'best' and saveto:
                 best_p = unzip(tparams)
-                save_params(best_p, model_filename, saveto_filename)
+                if overwrite:
+                    save_params(best_p, experiment_id, saveto_filename)
+                else:
+                    save_params(best_p, experiment_id, saveto_filename, uidx)
 
             if valid_sync:
                 worker.copy_to_local()

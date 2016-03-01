@@ -38,6 +38,7 @@ def train(experiment_id, model_options, data_options,
           saveto,
           valid_freq,
           save_freq,   # save the parameters after every saveFreq updates
+          overwrite,   # overwrite the previous best model
           sample_freq,   # generate some samples after every sampleFreq
           reload_=False):
 
@@ -46,7 +47,6 @@ def train(experiment_id, model_options, data_options,
     LOGGER.info('Building model')
     params = init_params(model_options)
     # reload parameters
-    model_filename = '{}.model.npz'.format(experiment_id)
     saveto_filename = '{}.npz'.format(saveto)
     if reload_ and os.path.exists(saveto_filename):
         LOGGER.info('Loading parameters from {}'.format(saveto_filename))
@@ -163,7 +163,10 @@ def train(experiment_id, model_options, data_options,
                     params = unzip(tparams)
 
                 # save params to exp_id.npz and symlink model.npz to it
-                save_params(params, model_filename, saveto_filename)
+                if overwrite:
+                    save_params(params, experiment_id, saveto_filename)
+                else:
+                    save_params(params, experiment_id, saveto_filename, uidx)
 
             # generate some samples with the model and display them
             if numpy.mod(uidx, sample_freq) == 0:
@@ -257,7 +260,7 @@ def train(experiment_id, model_options, data_options,
                            valid_stream).mean()
 
     params = copy.copy(best_p)
-    save_params(params, model_filename, saveto_filename)
+    save_params(params, experiment_id, saveto_filename)
 
     return valid_err
 
