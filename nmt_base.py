@@ -7,7 +7,6 @@ import os
 from collections import OrderedDict
 
 import numpy
-import six
 import theano
 from six.moves import xrange
 from theano import tensor
@@ -15,50 +14,8 @@ from theano.sandbox.rng_mrg import MRG_RandomStreams
 
 from utils import dropout_layer, norm_weight, concatenate
 from layers import get_layer
-from data_iterator import get_stream, load_dict
 
 LOGGER = logging.getLogger(__name__)
-
-
-def load_data(src, trg,
-              valid_src, valid_trg,
-              src_vocab, trg_vocab,
-              n_words, n_words_src,
-              batch_size, valid_batch_size,
-              max_src_length, max_trg_length):
-    LOGGER.info('Loading data')
-
-    dictionaries = [src_vocab, trg_vocab]
-    datasets = [src, trg]
-    valid_datasets = [valid_src, valid_trg]
-
-    # load dictionaries and invert them
-    worddicts = [None] * len(dictionaries)
-    worddicts_r = [None] * len(dictionaries)
-    for ii, dd in enumerate(dictionaries):
-        worddicts[ii] = load_dict(dd)
-        worddicts_r[ii] = dict()
-        for kk, vv in six.iteritems(worddicts[ii]):
-            worddicts_r[ii][vv] = kk
-
-    train_stream = get_stream([datasets[0]],
-                              [datasets[1]],
-                              dictionaries[0],
-                              dictionaries[1],
-                              n_words_source=n_words_src,
-                              n_words_target=n_words,
-                              batch_size=batch_size,
-                              max_src_length=max_src_length,
-                              max_trg_length=max_trg_length)
-    valid_stream = get_stream([valid_datasets[0]],
-                              [valid_datasets[1]],
-                              dictionaries[0],
-                              dictionaries[1],
-                              n_words_source=n_words_src,
-                              n_words_target=n_words,
-                              batch_size=valid_batch_size)
-
-    return worddicts_r, train_stream, valid_stream
 
 
 # initialize all parameters

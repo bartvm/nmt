@@ -16,9 +16,9 @@ from theano import tensor
 from six.moves import xrange
 from toolz.dicttoolz import merge
 
-from data_iterator import UNK_TOKEN
+from data_iterator import UNK_TOKEN, load_data
 from nmt_base import (pred_probs, build_model, save_params,
-                      build_sampler, init_params, gen_sample, load_data)
+                      build_sampler, init_params, gen_sample)
 from utils import load_params, init_tparams, zipp, unzip, itemlist
 import optimizers
 

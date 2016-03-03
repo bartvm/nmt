@@ -16,8 +16,9 @@ from theano import tensor
 from toolz.dicttoolz import merge
 
 import optimizers
+from data_iterator import load_data
 from nmt_base import (init_params, build_model, build_sampler, save_params,
-                      pred_probs, load_data)
+                      pred_probs)
 from utils import unzip, init_tparams, load_params, itemlist
 
 logging.basicConfig(level=logging.INFO,

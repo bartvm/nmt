@@ -13,7 +13,7 @@ import numpy
 from mimir import ServerLogger
 from platoon.channel import Controller
 
-from nmt_base import load_data
+from data_iterator import load_data
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s:%(levelname)s:%(name)s:%(message)s')

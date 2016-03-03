@@ -1,7 +1,9 @@
 import io
+import logging
 from itertools import count
 
 import numpy
+import six
 
 from fuel.datasets.text import TextFile
 from fuel.transformers import Merge
@@ -9,6 +11,7 @@ from fuel.schemes import ConstantScheme
 from fuel.transformers import (Batch, Cache, Mapping, SortMapping, Padding,
                                Filter, Transformer)
 
+LOGGER = logging.getLogger(__name__)
 
 EOS_TOKEN = '<EOS>'  # 0
 UNK_TOKEN = '<UNK>'  # 1
@@ -136,3 +139,44 @@ def get_stream(source, target, source_dict, target_dict, batch_size,
     masked_batches = Padding(shuffled_batches)
 
     return masked_batches
+
+
+def load_data(src, trg,
+              valid_src, valid_trg,
+              src_vocab, trg_vocab,
+              n_words, n_words_src,
+              batch_size, valid_batch_size,
+              max_src_length, max_trg_length):
+    LOGGER.info('Loading data')
+
+    dictionaries = [src_vocab, trg_vocab]
+    datasets = [src, trg]
+    valid_datasets = [valid_src, valid_trg]
+
+    # load dictionaries and invert them
+    worddicts = [None] * len(dictionaries)
+    worddicts_r = [None] * len(dictionaries)
+    for ii, dd in enumerate(dictionaries):
+        worddicts[ii] = load_dict(dd)
+        worddicts_r[ii] = dict()
+        for kk, vv in six.iteritems(worddicts[ii]):
+            worddicts_r[ii][vv] = kk
+
+    train_stream = get_stream([datasets[0]],
+                              [datasets[1]],
+                              dictionaries[0],
+                              dictionaries[1],
+                              n_words_source=n_words_src,
+                              n_words_target=n_words,
+                              batch_size=batch_size,
+                              max_src_length=max_src_length,
+                              max_trg_length=max_trg_length)
+    valid_stream = get_stream([valid_datasets[0]],
+                              [valid_datasets[1]],
+                              dictionaries[0],
+                              dictionaries[1],
+                              n_words_source=n_words_src,
+                              n_words_target=n_words,
+                              batch_size=valid_batch_size)
+
+    return worddicts_r, train_stream, valid_stream
