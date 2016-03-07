@@ -7,6 +7,8 @@ import os
 import shutil
 import sys
 import time
+import signal
+import Queue
 
 import numpy
 import six
@@ -19,14 +21,125 @@ from toolz.dicttoolz import merge
 from data_iterator import UNK_TOKEN, load_data
 from nmt_base import (pred_probs, build_model, save_params,
                       build_sampler, init_params, gen_sample)
-from utils import load_params, init_tparams, zipp, unzip, itemlist
+from utils import (load_params, init_tparams, zipp,
+                   unzip, itemlist, RepeatedTimer)
 import optimizers
+import subprocess
 
 logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger(__name__)
 
 
-def train(experiment_id, model_options, data_options,
+def validation(tparams, process_queue, translator_cmd, evaluator_cmd,
+               model_filename, trans_valid_src):
+
+    # We need to make sure that the model remains unchanged during evaluation
+    model = unzip(tparams)
+    save_params(model, model_filename)
+
+    # Translation runs on CPUs with BLAS
+    env_THEANO_FLAGS = 'device=cpu,floatX=%s,optimizer=%s' % (
+        theano.config.floatX,
+        theano.config.optimizer)
+
+    env = dict(os.environ, **{'OMP_NUM_THREADS': '1',
+                              'THEANO_FLAGS': env_THEANO_FLAGS})
+
+    trans_proc = subprocess.Popen(translator_cmd, env=env,
+                                  stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE)
+
+    process_queue.put(trans_proc)
+
+    _, error_msg = trans_proc.communicate()
+
+    if trans_proc.returncode != 0:
+        raise RuntimeError("%s\nFailed to translate sentences" % error_msg)
+
+    try:
+        with open(trans_valid_src, 'r') as trans_result_f:
+            eval_proc = subprocess.Popen(evaluator_cmd,
+                                         stdin=trans_result_f,
+                                         stdout=subprocess.PIPE,
+                                         stderr=subprocess.PIPE)
+
+            process_queue.put(eval_proc)
+
+            # sample output:
+            # BLEU = 100.00, 100.0/100.0/100.0/100.0
+            # extra part of the output is ignored.
+
+            out_msg, err_msg = eval_proc.communicate()
+
+            if eval_proc.returncode != 0:
+                raise RuntimeError("%s\nFailed to evaluate translation" %
+                                   error_msg)
+
+            overall_bleu_score = float(out_msg.split(',')[0].split('=')[1])
+            bleu_n = [float(score) for score in out_msg.split()[3].split('/')]
+            bleu_1, bleu_2, bleu_3, bleu_4 = bleu_n
+
+            evaluation_score = (overall_bleu_score,
+                                bleu_1, bleu_2, bleu_3, bleu_4)
+
+            os.remove(trans_valid_src)
+
+    except IOError:
+        evaluation_score = (0., 0., 0., 0., 0.)
+
+    while not process_queue.empty():
+        process_queue.get()
+
+    return (model, evaluation_score)
+
+
+def prepare_validation_timer(tparams,
+                             process_queue,
+                             model_filename,
+                             model_option_filename,
+                             eval_intv,
+                             valid_ret_queue,
+                             translator,
+                             evaluator,
+                             nproc,
+                             beam_size,
+                             src_vocab,
+                             trg_vocab,
+                             valid_src,
+                             valid_trg,
+                             trans_valid_src):
+
+    translator_cmd = [
+        "python",
+        translator,
+        "-p", str(nproc),
+        "-k", str(beam_size),
+        "-n",
+        model_filename,
+        model_option_filename,
+        src_vocab,
+        trg_vocab,
+        valid_src,
+        trans_valid_src,
+    ]
+
+    evaluator_cmd = [
+        "perl",
+        evaluator,
+        valid_trg,
+    ]
+
+    args = (tparams, process_queue)
+    kwargs = {'translator_cmd': translator_cmd,
+              'evaluator_cmd': evaluator_cmd,
+              'model_filename': model_filename,
+              'trans_valid_src': trans_valid_src}
+
+    return RepeatedTimer(eval_intv*60, validation, valid_ret_queue,
+                         *args, **kwargs)
+
+
+def train(experiment_id, model_options, data_options, validation_options,
           patience,  # early stopping patience
           max_epochs,
           finish_after,  # finish after this many updates
@@ -37,6 +150,7 @@ def train(experiment_id, model_options, data_options,
           optimizer,
           saveto,
           valid_freq,
+          eval_intv,    # time interval for evaluation in minutes
           save_freq,   # save the parameters after every saveFreq updates
           sample_freq,   # generate some samples after every sampleFreq
           reload_=False):
@@ -47,6 +161,7 @@ def train(experiment_id, model_options, data_options,
     params = init_params(model_options)
     # reload parameters
     model_filename = '{}.model.npz'.format(experiment_id)
+    model_option_filename = '{}.config.json'.format(experiment_id)
     saveto_filename = '{}.npz'.format(saveto)
     if reload_ and os.path.exists(saveto_filename):
         LOGGER.info('Loading parameters from {}'.format(saveto_filename))
@@ -117,13 +232,40 @@ def train(experiment_id, model_options, data_options,
     LOGGER.info('Optimization')
 
     log = Logger(filename='{}.log.jsonl.gz'.format(experiment_id))
+
+    # evaluation score will be stored into the following queue
+    valid_ret_queue = Queue.Queue()
+    process_queue = Queue.Queue()
+
+    rt = prepare_validation_timer(tparams, process_queue, model_filename,
+                                  model_option_filename,
+                                  eval_intv, valid_ret_queue,
+                                  **validation_options)
+    rt.start()
+
+    def _timer_signal_handler(signum, frame):
+        print('Received SIGINT')
+        print('Now attempting to stop the timer')
+        rt.stop()
+
+        print('Please wait to terminate all child processes')
+        while not process_queue.empty():
+            proc = process_queue.get()
+            proc.send_signal(signal.SIGINT)
+            proc.wait()
+
+        sys.exit(1)
+
+    signal.signal(signal.SIGINT, _timer_signal_handler)
+
     train_start = time.clock()
     best_p = None
-    min_valid_cost = numpy.inf
+    best_score = 0
     bad_counter = 0
 
     uidx = 0
     estop = False
+
     for eidx in xrange(max_epochs):
         n_samples = 0
 
@@ -221,18 +363,26 @@ def train(experiment_id, model_options, data_options,
                 valid_err = valid_errs.mean()
                 log_entry['validation_cost'] = float(valid_err)
 
-                if valid_err <= min_valid_cost:
-                    min_valid_cost = valid_err
-                    best_p = unzip(tparams)
+                if not numpy.isfinite(valid_err):
+                    raise RuntimeError('NaN detected in validation error')
+
+            # collect validation scores (e.g., BLEU) from the child thread
+            if not valid_ret_queue.empty():
+
+                (ret_model, scores) = valid_ret_queue.get()
+
+                valid_bleu = scores[0]
+                log_entry['validation_bleu'] = valid_bleu
+
+                if valid_bleu > best_score:
+                    best_p = ret_model
+                    best_score = valid_bleu
                     bad_counter = 0
                 else:
                     bad_counter += 1
                     if bad_counter > patience:
                         estop = True
                         break
-
-                if not numpy.isfinite(valid_err):
-                    raise RuntimeError('NaN detected in validation error')
 
             # finish after this many updates
             if uidx >= finish_after:
@@ -268,5 +418,5 @@ if __name__ == "__main__":
     # Create unique experiment ID and backup config file
     experiment_id = binascii.hexlify(os.urandom(3)).decode()
     shutil.copyfile(sys.argv[1], '{}.config.json'.format(experiment_id))
-    train(experiment_id, config['model'], config['data'],
+    train(experiment_id, config['model'], config['data'], config['validation'],
           **merge(config['training'], config['management']))
