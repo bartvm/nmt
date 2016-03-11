@@ -111,8 +111,8 @@ def train(experiment_id, model_options, data_options,
     # compile the optimizer, the actual computational graph is compiled here
     lr = tensor.scalar(name='lr')
     LOGGER.info('Building optimizers')
-    f_grad_shared, f_update = getattr(optimizers, optimizer)(lr, tparams,
-                                                             grads, inps, cost)
+    f_grad_shared, f_update, opimizer_state = \
+        getattr(optimizers, optimizer)(lr, tparams, grads, inps, cost)
 
     LOGGER.info('Optimization')
 
@@ -157,12 +157,8 @@ def train(experiment_id, model_options, data_options,
             if numpy.mod(uidx, save_freq) == 0:
                 LOGGER.info('Saving best model so far')
 
-                if best_p is not None:
-                    params = best_p
-                else:
-                    params = unzip(tparams)
-
                 # save params to exp_id.npz and symlink model.npz to it
+                params = unzip(tparams)
                 save_params(params, model_filename, saveto_filename)
 
             # generate some samples with the model and display them

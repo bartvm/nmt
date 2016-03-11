@@ -10,7 +10,7 @@ import six
 import theano
 from mimir import RemoteLogger
 from platoon.channel import Worker
-from platoon.param_sync import EASGD
+from platoon.param_sync import ASGD
 from six.moves import xrange
 from theano import tensor
 from toolz.dicttoolz import merge
@@ -19,7 +19,7 @@ import optimizers
 from data_iterator import load_data
 from nmt_base import (init_params, build_model, build_sampler, save_params,
                       pred_probs)
-from utils import unzip, init_tparams, load_params, itemlist
+from utils import unzip, init_tparams, load_params, itemlist, name_dict
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s:%(levelname)s:%(name)s:%(message)s')
@@ -44,7 +44,7 @@ def train(worker, model_options, data_options,
           control_port,
           batch_port,
           log_port,
-          reload_):
+          reload_from=None):
 
     LOGGER.info('Connecting to data socket ({}) and loading validation data'
                 .format(batch_port))
@@ -55,16 +55,15 @@ def train(worker, model_options, data_options,
     params = init_params(model_options)
     # reload parameters
     experiment_id = worker.send_req('experiment_id')
-    model_filename = '{}.model.npz'.format(experiment_id)
-    saveto_filename = '{}.npz'.format(saveto)
-    if reload_ and os.path.exists(saveto_filename):
-        LOGGER.info('Loading parameters from {}'.format(saveto_filename))
-        params = load_params(saveto_filename, params)
+    checkpoint_filename = '{}.checkpoint.npz'.format(experiment_id)
+    best_filename = '{}.best.npz'.format(experiment_id)
+    if reload_from and os.path.exists(reload_from):
+        LOGGER.info('Loading parameters from {}'.format(reload_from))
+        params = load_params(reload_from, params)
 
     LOGGER.info('Initializing parameters')
     tparams = init_tparams(params)
-    alpha = worker.send_req('alpha')
-    worker.init_shared_params(tparams.values(), param_sync_rule=EASGD(alpha))
+    worker.init_shared_params(tparams.values(), param_sync_rule=ASGD())
 
     # use_noise is for dropout
     trng, use_noise, \
@@ -122,14 +121,14 @@ def train(worker, model_options, data_options,
     # compile the optimizer, the actual computational graph is compiled here
     lr = tensor.scalar(name='lr')
     LOGGER.info('Building optimizers')
-    f_grad_shared, f_update = getattr(optimizers, optimizer)(lr, tparams,
-                                                             grads, inps, cost)
+    f_grad_shared, f_update, optimizer_state = \
+        getattr(optimizers, optimizer)(lr, tparams, grads, inps, cost)
+    optimizer_state = name_dict(optimizer_state)
 
     LOGGER.info('Optimization')
 
     log = RemoteLogger(port=log_port)
     train_start = time.clock()
-    best_p = None
 
     # Making sure that the worker start training with the most recent params
     worker.copy_to_local()
@@ -144,20 +143,19 @@ def train(worker, model_options, data_options,
                 x, x_mask, y, y_mask = worker.recv_mb()
 
                 uidx += 1
-                log_entry = {'iteration': uidx}
+                log_entry = {}
 
                 # compute cost, grads and copy grads to shared variables
                 update_start = time.clock()
                 cost = f_grad_shared(x, x_mask, y, y_mask)
                 f_update(lrate)
 
+                log_entry['update_time'] = time.clock() - update_start
                 log_entry['cost'] = float(cost)
                 log_entry['average_source_length'] = \
                     float(x_mask.sum(0).mean())
                 log_entry['average_target_length'] = \
                     float(y_mask.sum(0).mean())
-                log_entry['update_time'] = time.clock() - update_start
-                log_entry['train_time'] = time.clock() - train_start
                 log_entry['time'] = time.time()
                 log.log(log_entry)
 
@@ -177,8 +175,11 @@ def train(worker, model_options, data_options,
                      'time': time.time()})
 
             if res == 'best' and saveto:
-                best_p = unzip(tparams)
-                save_params(best_p, model_filename, saveto_filename)
+                params_and_state = merge(unzip(tparams),
+                                         unzip(optimizer_state))
+                save_params(params_and_state, best_filename,
+                            symlink=checkpoint_filename,
+                            state=unzip(name_dict(optimizer_state)))
 
             if valid_sync:
                 worker.copy_to_local()

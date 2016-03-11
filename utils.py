@@ -2,10 +2,8 @@ import theano
 from theano import tensor
 import warnings
 import six
-import pickle
 
 import numpy
-import inspect
 from collections import OrderedDict
 
 
@@ -21,6 +19,14 @@ def unzip(zipped):
     for kk, vv in six.iteritems(zipped):
         new_params[kk] = vv.get_value()
     return new_params
+
+
+# Turn list of objects with .name attribute into dict
+def name_dict(lst):
+    d = OrderedDict()
+    for obj in lst:
+        d[obj.name] = obj
+    return d
 
 
 # get the list of parameters: Note that tparams must be OrderedDict
@@ -83,113 +89,3 @@ def uniform_weight(nin, nout, scale=None):
 
     W = numpy.random.uniform(low=-scale, high=scale, size=(nin, nout))
     return W.astype('float32')
-
-
-def concatenate(tensor_list, axis=0):
-    """
-    Alternative implementation of `theano.tensor.concatenate`.
-    This function does exactly the same thing, but contrary to Theano's own
-    implementation, the gradient is implemented on the GPU.
-    Backpropagating through `theano.tensor.concatenate` yields slowdowns
-    because the inverse operation (splitting) needs to be done on the CPU.
-    This implementation does not have that problem.
-    :usage:
-        >>> x, y = theano.tensor.matrices('x', 'y')
-        >>> c = concatenate([x, y], axis=1)
-    :parameters:
-        - tensor_list : list
-            list of Theano tensor expressions that should be concatenated.
-        - axis : int
-            the tensors will be joined along this axis.
-    :returns:
-        - out : tensor
-            the concatenated tensor expression.
-    """
-    concat_size = sum(tt.shape[axis] for tt in tensor_list)
-
-    output_shape = ()
-    for k in range(axis):
-        output_shape += (tensor_list[0].shape[k], )
-    output_shape += (concat_size, )
-    for k in range(axis + 1, tensor_list[0].ndim):
-        output_shape += (tensor_list[0].shape[k], )
-
-    out = tensor.zeros(output_shape)
-    offset = 0
-    for tt in tensor_list:
-        indices = ()
-        for k in range(axis):
-            indices += (slice(None), )
-        indices += (slice(offset, offset + tt.shape[axis]), )
-        for k in range(axis + 1, tensor_list[0].ndim):
-            indices += (slice(None), )
-
-        out = tensor.set_subtensor(out[indices], tt)
-        offset += tt.shape[axis]
-
-    return out
-
-
-class Parameters():
-    def __init__(self):
-        # self.__dict__['tparams'] = dict()
-        self.__dict__['tparams'] = OrderedDict()
-
-    def __setattr__(self, name, array):
-        tparams = self.__dict__['tparams']
-        # if name not in tparams:
-        tparams[name] = array
-
-    def __setitem__(self, name, array):
-        self.__setattr__(name, array)
-
-    def __getitem__(self, name):
-        return self.__getattr__(name)
-
-    def __getattr__(self, name):
-        tparams = self.__dict__['tparams']
-        return tparams[name]
-
-    # def __getattr__(self):
-    # return self.get()
-
-    def remove(self, name):
-        del self.__dict__['tparams'][name]
-
-    def get(self):
-        return self.__dict__['tparams']
-
-    def values(self):
-        tparams = self.__dict__['tparams']
-        return tparams.values()
-
-    def save(self, filename):
-        tparams = self.__dict__['tparams']
-        pickle.dump({p: tparams[p] for p in tparams}, open(filename, 'wb'), 2)
-
-    def load(self, filename):
-        tparams = self.__dict__['tparams']
-        loaded = pickle.load(open(filename, 'rb'), encoding='latin1')
-        for k in loaded:
-            tparams[k] = loaded[k]
-
-    def setvalues(self, values):
-        tparams = self.__dict__['tparams']
-        for p, v in zip(tparams, values):
-            tparams[p] = v
-
-    def __enter__(self):
-        _, _, _, env_locals = inspect.getargvalues(inspect.currentframe(
-        ).f_back)
-        self.__dict__['_env_locals'] = env_locals.keys()
-
-    def __exit__(self, type, value, traceback):
-        _, _, _, env_locals = inspect.getargvalues(inspect.currentframe(
-        ).f_back)
-        prev_env_locals = self.__dict__['_env_locals']
-        del self.__dict__['_env_locals']
-        for k in env_locals.keys():
-            if k not in prev_env_locals:
-                self.__setattr__(k, env_locals[k])
-                env_locals[k] = self.__getattr__(k)
-        return True
