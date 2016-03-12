@@ -7,6 +7,7 @@ import argparse
 import numpy
 from data_iterator import load_dict
 
+from six.moves import xrange
 import io
 import json
 import signal
