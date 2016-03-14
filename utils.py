@@ -6,6 +6,7 @@ import pickle
 
 import numpy
 import inspect
+from threading import Timer
 from collections import OrderedDict
 
 
@@ -193,3 +194,31 @@ class Parameters():
                 self.__setattr__(k, env_locals[k])
                 env_locals[k] = self.__getattr__(k)
         return True
+
+
+class RepeatedTimer(object):
+    def __init__(self, interval, function, return_queue,
+                 *args, **kwargs):
+        self._timer = None
+        self._interval = interval
+        self.function = function
+        self._ret_queue = return_queue
+        self.args = args
+        self.kwargs = kwargs
+        self._is_running = False
+
+    def _run(self):
+        self.start()
+        ret = self.function(*self.args, **self.kwargs)
+        self._ret_queue.put(ret)
+        self._is_running = False
+
+    def start(self):
+        if not self._is_running:
+            self._timer = Timer(self._interval, self._run)
+            self._timer.start()
+            self._is_running = True
+
+    def stop(self):
+        self._timer.cancel()
+        self._is_running = False
