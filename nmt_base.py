@@ -593,16 +593,14 @@ def pred_probs(f_log_probs, ctx_len_emb ,options, stream):
     n_done = 0
 
     for x, x_mask, y, y_mask in stream.get_epoch_iterator():
-	n_done += len(x)
-
-       #x, x_mask, y, y_mask = prepare_data(x, y)
-
-        unk_ctx = get_ctx_matrix(x, ctx_len_emb)
-
-        pprobs = f_log_probs(x, x_mask, y, y_mask, unk_ctx)
+	n_done += len(x.T)
+        unk_ctx = get_ctx_matrix(x.T, ctx_len_emb)
+        pprobs = f_log_probs(x.T, x_mask.T, y.T, y_mask.T, unk_ctx)
         for pp in pprobs:
             probs.append(pp)
 
+        if numpy.isnan(numpy.mean(probs)):
+            ipdb.set_trace()
 
 	if not numpy.isfinite(numpy.mean(probs)):
             raise RuntimeError('non-finite probabilities')

@@ -1,6 +1,5 @@
 from __future__ import print_function
 
-import copy
 import logging
 import os
 import time
@@ -10,7 +9,7 @@ import six
 import theano
 from mimir import RemoteLogger
 from platoon.channel import Worker
-from platoon.param_sync import EASGD
+from platoon.param_sync import ASGD
 from six.moves import xrange
 from theano import tensor
 from toolz.dicttoolz import merge
@@ -20,7 +19,9 @@ from nmt_base import (init_params, build_model, build_sampler, save_params,
                       pred_probs, load_data)
 from utils import unzip, init_tparams, load_params, itemlist, get_ctx_matrix
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO,
+                            format='%(asctime)s:%(levelname)s:%(name)s:%(message)s')
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -41,6 +42,7 @@ def train(worker, model_options, data_options,
           sample_freq,   # generate some samples after every sampleFreq
           control_port,
           batch_port,
+          log_port,
           reload_):
 
     ctx_len_emb = 5
@@ -55,12 +57,14 @@ def train(worker, model_options, data_options,
     model_filename = '{}.model.npz'.format(experiment_id)
     saveto_filename = '{}.npz'.format(saveto)
     if reload_ and os.path.exists(saveto_filename):
+        LOGGER.info('Reloading')
         LOGGER.info('Loading parameters from {}'.format(saveto_filename))
         params = load_params(saveto_filename, params)
 
     LOGGER.info('Initializing parameters')
     tparams = init_tparams(params)
-    worker.init_shared_params(tparams.values(), param_sync_rule=EASGD(0.25))
+    alpha = worker.send_req('alpha')
+    worker.init_shared_params(tparams.values(), param_sync_rule=ASGD())
 
     # use_noise is for dropout
 
@@ -70,8 +74,6 @@ def train(worker, model_options, data_options,
         cost, \
         unk_ctx = \
         build_model(tparams, model_options)
-
-
 
     inps = [x, x_mask, y, y_mask, unk_ctx]
 
@@ -128,7 +130,7 @@ def train(worker, model_options, data_options,
 
     LOGGER.info('Optimization')
 
-    log = RemoteLogger()
+    log = RemoteLogger(port=log_port)
     train_start = time.clock()
     best_p = None
 
