@@ -72,6 +72,8 @@ def validation(tparams, process_queue, translator_cmd, evaluator_cmd,
             out_msg, err_msg = eval_proc.communicate()
 
             if eval_proc.returncode != 0:
+                LOGGER.error('Return value from the evaluator: %d' %
+                             eval_proc.returncode)
                 raise RuntimeError("%s\nFailed to evaluate translation" %
                                    error_msg)
 
@@ -85,6 +87,7 @@ def validation(tparams, process_queue, translator_cmd, evaluator_cmd,
             os.remove(trans_valid_src)
 
     except IOError:
+        LOGGER.error('Translation cannot be found, so that BLEU set to 0')
         evaluation_score = (0., 0., 0., 0., 0.)
 
     while not process_queue.empty():
@@ -406,8 +409,13 @@ def train(experiment_id, model_options, data_options, validation_options,
     valid_err = pred_probs(f_log_probs, model_options,
                            valid_stream).mean()
 
+    if not best_p:
+        best_p = unzip(tparams)
+
     params = copy.copy(best_p)
     save_params(params, model_filename, saveto_filename)
+
+    rt.stop()
 
     return valid_err
 

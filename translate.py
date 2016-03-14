@@ -88,7 +88,7 @@ def translate_model(exit_event, queue, rqueue, pid,
         sidx = numpy.argmin(score)
         return sample[sidx]
 
-    while not exit_event.is_set():
+    while (not exit_event.is_set()) and (not queue.empty()):
         req = queue.get()
         if req is None:
             break
