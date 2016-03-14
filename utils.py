@@ -208,10 +208,10 @@ class RepeatedTimer(object):
         self._is_running = False
 
     def _run(self):
+        self._is_running = False
         self.start()
         ret = self.function(*self.args, **self.kwargs)
         self._ret_queue.put(ret)
-        self._is_running = False
 
     def start(self):
         if not self._is_running:
