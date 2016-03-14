@@ -5,7 +5,7 @@ from __future__ import print_function
 import argparse
 
 import numpy
-from data_iterator import load_dict
+from data_iterator import (load_dict, EOS_TOKEN, UNK_TOKEN)
 
 from six.moves import xrange
 import io
@@ -21,26 +21,14 @@ from multiprocessing import Process, Queue, Event
 
 
 # utility function
-def _seqs2words(caps, word_idict_trg):
-    capsw = []
-    for cc in caps:
-        ww = []
-        for w in cc:
-            if w == 0:
-                break
-            ww.append(word_idict_trg[w])
-        capsw.append(' '.join(ww))
-    return capsw
-
-
 def _send_jobs(fname, queue, word_dict, n_words_src):
     with open(fname, 'r') as f:
         for idx, line in enumerate(f):
             words = line.strip().split()
+            words += [EOS_TOKEN]
             x = map(lambda w: word_dict[w] if w in word_dict else 1, words)
             x = map(lambda ii: ii if ii < n_words_src else 1, x)
-            x += [0]
-            queue.put((idx, x))
+            queue.put((idx, x, words))
     return idx+1
 
 
@@ -57,8 +45,8 @@ def _retrieve_jobs(rqueue, n_samples):
     return trans
 
 
-def translate_model(exit_event, queue, rqueue, pid,
-                    model, options, k, normalize):
+def translate_model(exit_event, queue, rqueue, pid, i2w_trg,
+                    model, options, k, normalize, unk_replace):
 
     from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
     trng = RandomStreams(1234)
@@ -74,29 +62,65 @@ def translate_model(exit_event, queue, rqueue, pid,
     # word index
     f_init, f_next = build_sampler(tparams, options, trng)
 
+    def _seq2words(seq, word_idict_trg):
+        words = []
+        for w in seq:
+            if w == 0:
+                break
+            words.append(word_idict_trg[w])
+        return words
+
     def _translate(seq):
+        seq = numpy.array(seq).reshape([len(seq), 1])
+
         # sample given an input sequence and obtain scores
-        sample, score = gen_sample(tparams, f_init, f_next,
-                                   numpy.array(seq).reshape([len(seq), 1]),
-                                   options, trng=trng, k=k, maxlen=200,
-                                   stochastic=False, argmax=False)
+        samples, alignments, scores = gen_sample(tparams, f_init, f_next,
+                                                 seq, options, trng=trng,
+                                                 k=k, maxlen=100,
+                                                 stochastic=False,
+                                                 argmax=False)
 
         # normalize scores according to sequence lengths
         if normalize:
-            lengths = numpy.array([len(s) for s in sample])
-            score = score / lengths
-        sidx = numpy.argmin(score)
-        return sample[sidx]
+            lengths = numpy.array([len(s) for s in samples])
+            scores = scores / lengths
+        sidx = numpy.argmin(scores)
+        return samples[sidx], alignments[sidx]
+
+    def _replace_unk(trans_words, src_words, alignment):
+        for idx, word in enumerate(trans_words):
+            if word == UNK_TOKEN:
+                # pick a source word
+                # with which the target word is strongly aligned
+                trans_words[idx] = src_words[alignment[idx].argmax()]
+
+        return trans_words
 
     while (not exit_event.is_set()) and (not queue.empty()):
         req = queue.get()
         if req is None:
             break
 
-        idx, x = req[0], req[1]
-        seq = _translate(x)
+        # idx: sentence index
+        # x: a sequence of word indices
+        # src_words: original source sentence
+        idx, x, src_words = req[0], req[1], req[2]
+        seq, alignment = _translate(x)
 
-        rqueue.put((idx, seq))
+        assert len(seq) == len(alignment)
+
+        # indices to tokens
+        trans_words = _seq2words(seq, i2w_trg)
+
+        if unk_replace:
+            # unknown word replacement
+            trans_words = _replace_unk(trans_words, src_words, alignment)
+
+        # list of words to a single string
+        trans_words = ' '.join(trans_words)
+
+        # put the result
+        rqueue.put((idx, trans_words))
 
     # write to release resources if needed
 
@@ -104,7 +128,8 @@ def translate_model(exit_event, queue, rqueue, pid,
 
 
 def main(model_path, option_path, dictionary_source, dictionary_target,
-         source_file, saveto, k=5, normalize=False, n_process=5):
+         source_file, saveto, k=5, normalize=False, unk_replace=False,
+         n_process=5):
 
     # load model_options
     with io.open(option_path) as f:
@@ -131,15 +156,23 @@ def main(model_path, option_path, dictionary_source, dictionary_target,
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
     # create input and output queues for processes
-    queue = Queue()
-    rqueue = Queue()
+    queue = Queue()     # producer
+    rqueue = Queue()    # consumer
     exit_event = Event()
+
+    # put all of the sentences into the producer queue
+    n_samples = _send_jobs(source_file,
+                           queue,
+                           word_dict,
+                           options['n_words_src'])
+
+    # spawning workers
     processes = [None] * n_process
     for midx in xrange(n_process):
         processes[midx] = Process(
             target=translate_model,
-            args=(exit_event, queue, rqueue, midx,
-                  model_path, options, k, normalize))
+            args=(exit_event, queue, rqueue, midx, word_idict_trg,
+                  model_path, options, k, normalize, unk_replace))
         processes[midx].start()
 
     signal.signal(signal.SIGINT, default_sigint_handler)
@@ -163,17 +196,12 @@ def main(model_path, option_path, dictionary_source, dictionary_target,
 
     signal.signal(signal.SIGINT, _signal_handler)
 
-    n_samples = _send_jobs(source_file,
-                           queue,
-                           word_dict,
-                           options['n_words_src'])
-
     # wait until all child processes finish the translation job
     for proc in processes:
         proc.join()
 
     # collecting translated sentences from the return queue
-    trans = _seqs2words(_retrieve_jobs(rqueue, n_samples), word_idict_trg)
+    trans = _retrieve_jobs(rqueue, n_samples)
     _finish_processes(queue, n_process)
 
     with open(saveto, 'w') as f:
@@ -185,6 +213,7 @@ if __name__ == "__main__":
     parser.add_argument('-k', type=int, default=5)
     parser.add_argument('-p', type=int, default=5)
     parser.add_argument('-n', action="store_true", default=False)
+    parser.add_argument('-u', action="store_true", default=False)
     parser.add_argument('model_path', type=str)
     parser.add_argument('option_path', type=str)
     parser.add_argument('dictionary_source', type=str)
@@ -197,4 +226,4 @@ if __name__ == "__main__":
     main(args.model_path, args.option_path,
          args.dictionary_source, args.dictionary_target,
          args.source, args.saveto, k=args.k, normalize=args.n,
-         n_process=args.p)
+         unk_replace=args.u, n_process=args.p)
