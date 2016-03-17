@@ -2,27 +2,26 @@
 Translates a source file using a translation model.
 '''
 from __future__ import print_function
+
 import argparse
-
-import numpy
-from data_iterator import (load_dict, EOS_TOKEN, UNK_TOKEN)
-
-from six.moves import xrange
-import io
-import json
 import signal
 import sys
-
-from nmt_base import (build_sampler, gen_sample, init_params)
-
-from utils import (load_params, init_tparams)
-
+import traceback
+import numpy
+import io
+import json
 from multiprocessing import Process, Queue, Event
+
+from six.moves import xrange
+
+from data_iterator import (load_dict, EOS_TOKEN, UNK_TOKEN)
+from nmt_base import (build_sampler, gen_sample, init_params)
+from utils import (load_params, init_tparams)
 
 
 # utility function
 def _send_jobs(fname, queue, word_dict, n_words_src):
-    with open(fname, 'r') as f:
+    with io.open(fname, 'r') as f:
         for idx, line in enumerate(f):
             words = line.strip().split()
             words += [EOS_TOKEN]
@@ -30,11 +29,6 @@ def _send_jobs(fname, queue, word_dict, n_words_src):
             x = map(lambda ii: ii if ii < n_words_src else 1, x)
             queue.put((idx, x, words))
     return idx+1
-
-
-def _finish_processes(queue, n_process):
-    for midx in xrange(n_process):
-        queue.put(None)
 
 
 def _retrieve_jobs(rqueue, n_samples):
@@ -92,7 +86,8 @@ def translate_model(exit_event, queue, rqueue, pid, i2w_trg,
             if word == UNK_TOKEN:
                 # pick a source word
                 # with which the target word is strongly aligned
-                trans_words[idx] = src_words[alignment[idx].argmax()]
+                # except for the EOS token
+                trans_words[idx] = src_words[alignment[idx][:-1].argmax()]
 
         return trans_words
 
@@ -138,14 +133,13 @@ def main(model_path, option_path, dictionary_source, dictionary_target,
     options = config['model']
 
     # load source dictionary and invert
-    word_dict = load_dict(dictionary_source, n_words=options['n_words_src']+2)
+    word_dict = load_dict(dictionary_source, n_words=options['n_words_src'])
     word_idict = dict()
     for kk, vv in word_dict.iteritems():
         word_idict[vv] = kk
 
     # load target dictionary and invert
-    word_dict_trg = load_dict(dictionary_target,
-                              n_words=options['n_words']+2)
+    word_dict_trg = load_dict(dictionary_target, n_words=options['n_words'])
     word_idict_trg = dict()
     for kk, vv in word_dict_trg.iteritems():
         word_idict_trg[vv] = kk
@@ -166,6 +160,10 @@ def main(model_path, option_path, dictionary_source, dictionary_target,
                            word_dict,
                            options['n_words_src'])
 
+    # add sentinel values into the producer queue
+    for midx in xrange(n_process):
+        queue.put(None)
+
     # spawning workers
     processes = [None] * n_process
     for midx in xrange(n_process):
@@ -173,18 +171,20 @@ def main(model_path, option_path, dictionary_source, dictionary_target,
             target=translate_model,
             args=(exit_event, queue, rqueue, midx, word_idict_trg,
                   model_path, options, k, normalize, unk_replace))
-        processes[midx].start()
+
+    for proc in processes:
+        proc.start()
 
     signal.signal(signal.SIGINT, default_sigint_handler)
 
-    def _signal_handler(signum, frame):
-        print('Received an interrpt signal.')
-        print('Please wait for releasing resources...')
-
+    def _stop_child_processes():
         exit_event.set()
 
+    def _clear_resources():
+
         for proc in processes:
-            proc.join()
+            if proc.is_alive():
+                proc.terminate()
 
         while not queue.empty():
             queue.get()
@@ -192,20 +192,30 @@ def main(model_path, option_path, dictionary_source, dictionary_target,
         while not rqueue.empty():
             rqueue.get()
 
-        sys.exit(0)
+    def _signal_handler(signum, frame):
+        # print('Received an interrpt signal.')
+        # print('Please wait for releasing resources...')
+
+        _stop_child_processes()
+        _clear_resources()
+
+        sys.exit(130)
 
     signal.signal(signal.SIGINT, _signal_handler)
 
-    # wait until all child processes finish the translation job
-    for proc in processes:
-        proc.join()
-
     # collecting translated sentences from the return queue
     trans = _retrieve_jobs(rqueue, n_samples)
-    _finish_processes(queue, n_process)
 
-    with open(saveto, 'w') as f:
-        print('\n'.join(trans), file=f)
+    try:
+        with io.open(saveto, 'w') as f:
+            print('\n'.join(trans), file=f)
+    except Exception:
+        print(traceback.format_exc(), file=sys.stderr)
+
+        _stop_child_processes()
+        _clear_resources()
+
+        sys.exit(1)
 
 
 if __name__ == "__main__":
