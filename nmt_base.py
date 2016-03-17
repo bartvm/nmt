@@ -266,6 +266,8 @@ def build_sampler(tparams, options, trng):
     # get the weighted averages of context for this target word y
     ctxs = proj[1]
 
+    dec_alphas = proj[2]
+
     logit_lstm = get_layer('ff')[1](tparams,
                                     next_state,
                                     options,
@@ -298,7 +300,7 @@ def build_sampler(tparams, options, trng):
     # sampled word for the next target, next hidden state to be used
     LOGGER.info('Building f_next')
     inps = [y, ctx, init_state]
-    outs = [next_probs, next_sample, next_state]
+    outs = [next_probs, next_sample, next_state, dec_alphas]
     f_next = theano.function(inps, outs, name='f_next', profile=False)
 
     return f_init, f_next
@@ -324,6 +326,7 @@ def gen_sample(tparams,
 
     sample = []
     sample_score = []
+    sample_alignment = []
     if stochastic:
         sample_score = 0
 
@@ -333,6 +336,7 @@ def gen_sample(tparams,
     hyp_samples = [[]] * live_k
     hyp_scores = numpy.zeros(live_k).astype('float32')
     hyp_states = []
+    hyp_alignment = [[]] * live_k
 
     # get initial state of decoder rnn and encoder context
     ret = f_init(x)
@@ -343,7 +347,7 @@ def gen_sample(tparams,
         ctx = numpy.tile(ctx0, [live_k, 1])
         inps = [next_w, ctx, next_state]
         ret = f_next(*inps)
-        next_p, next_w, next_state = ret[0], ret[1], ret[2]
+        next_p, next_w, next_state, next_alphas = ret
 
         if stochastic:
             if argmax:
@@ -355,40 +359,61 @@ def gen_sample(tparams,
             if nw == 0:
                 break
         else:
+            # NLL: the lower, the better
             cand_scores = hyp_scores[:, None] - numpy.log(next_p)
             cand_flat = cand_scores.flatten()
+            # select (k - dead_k) best words
+            # argsort's default order: ascending
             ranks_flat = cand_flat.argsort()[:(k - dead_k)]
+            costs = cand_flat[ranks_flat]
 
             voc_size = next_p.shape[1]
+            # translation candidate indices
             trans_indices = ranks_flat / voc_size
             word_indices = ranks_flat % voc_size
-            costs = cand_flat[ranks_flat]
 
             new_hyp_samples = []
             new_hyp_scores = numpy.zeros(k - dead_k).astype('float32')
+            new_hyp_alignment = []
             new_hyp_states = []
 
             for idx, [ti, wi] in enumerate(zip(trans_indices, word_indices)):
                 new_hyp_samples.append(hyp_samples[ti] + [wi])
                 new_hyp_scores[idx] = copy.copy(costs[idx])
+                """
+                assert abs(numpy.sum(next_alphas[ti]) - 1.0) < 1e-6, \
+                    '%f' % numpy.sum(next_alphas[ti])
+                """
+
+                new_hyp_alignment.append(
+                    hyp_alignment[ti] +
+                    [copy.copy(next_alphas[ti])]
+                )
                 new_hyp_states.append(copy.copy(next_state[ti]))
 
             # check the finished samples
             new_live_k = 0
             hyp_samples = []
+            hyp_alignment = []
             hyp_scores = []
             hyp_states = []
 
             for idx in xrange(len(new_hyp_samples)):
                 if new_hyp_samples[idx][-1] == 0:
+                    # if the last word is the EOS token
                     sample.append(new_hyp_samples[idx])
                     sample_score.append(new_hyp_scores[idx])
+                    sample_alignment.append(new_hyp_alignment[idx])
                     dead_k += 1
                 else:
                     new_live_k += 1
                     hyp_samples.append(new_hyp_samples[idx])
                     hyp_scores.append(new_hyp_scores[idx])
+                    hyp_alignment.append(new_hyp_alignment[idx])
                     hyp_states.append(new_hyp_states[idx])
+
+            assert new_live_k + dead_k == k
+
             hyp_scores = numpy.array(hyp_scores)
             live_k = new_live_k
 
@@ -406,8 +431,9 @@ def gen_sample(tparams,
             for idx in xrange(live_k):
                 sample.append(hyp_samples[idx])
                 sample_score.append(hyp_scores[idx])
+                sample_alignment.append(hyp_alignment[idx])
 
-    return sample, sample_score
+    return sample, sample_alignment, sample_score
 
 
 # calculate the log probablities on a given corpus using translation model

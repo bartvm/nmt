@@ -118,6 +118,7 @@ def prepare_validation_timer(tparams,
         "-p", str(nproc),
         "-k", str(beam_size),
         "-n",
+        "-u",
         model_filename,
         model_option_filename,
         src_vocab,
@@ -318,16 +319,16 @@ def train(experiment_id, model_options, data_options, validation_options,
                     log_entry['samples'].append({'source': '', 'truth': '',
                                                  'sample': ''})
                     stochastic = True
-                    sample, score = gen_sample(tparams,
-                                               f_init,
-                                               f_next,
-                                               x[:, jj][:, None],
-                                               model_options,
-                                               trng=trng,
-                                               k=1,
-                                               maxlen=30,
-                                               stochastic=stochastic,
-                                               argmax=False)
+                    sample, _, score = gen_sample(tparams,
+                                                  f_init,
+                                                  f_next,
+                                                  x[:, jj][:, None],
+                                                  model_options,
+                                                  trng=trng,
+                                                  k=1,
+                                                  maxlen=30,
+                                                  stochastic=stochastic,
+                                                  argmax=False)
                     for vv in x[:, jj]:
                         if vv == 0:
                             break
