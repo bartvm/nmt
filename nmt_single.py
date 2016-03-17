@@ -9,8 +9,9 @@ import sys
 import time
 import signal
 import Queue
-
+import subprocess
 import numpy
+
 import six
 import theano
 from mimir import Logger
@@ -24,7 +25,6 @@ from nmt_base import (pred_probs, build_model, save_params,
 from utils import (load_params, init_tparams, zipp,
                    unzip, itemlist, RepeatedTimer)
 import optimizers
-import subprocess
 
 logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger(__name__)
@@ -49,15 +49,18 @@ def validation(tparams, process_queue, translator_cmd, evaluator_cmd,
                                   stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE)
 
+    # put the process into the queue for signal handling
     process_queue.put(trans_proc)
 
-    _, error_msg = trans_proc.communicate()
+    output_msg, error_msg = trans_proc.communicate()
 
-    if trans_proc.returncode != 0:
+    process_queue.get()
+
+    if trans_proc.returncode == 1:
         raise RuntimeError("%s\nFailed to translate sentences" % error_msg)
 
     try:
-        with open(trans_valid_src, 'r') as trans_result_f:
+        with io.open(trans_valid_src, 'r') as trans_result_f:
             eval_proc = subprocess.Popen(evaluator_cmd,
                                          stdin=trans_result_f,
                                          stdout=subprocess.PIPE,
@@ -71,9 +74,12 @@ def validation(tparams, process_queue, translator_cmd, evaluator_cmd,
 
             out_msg, err_msg = eval_proc.communicate()
 
-            if eval_proc.returncode != 0:
-                LOGGER.error('Return value from the evaluator: %d' %
-                             eval_proc.returncode)
+            process_queue.get()
+
+            if eval_proc.returncode == 1:
+
+                os.remove(trans_valid_src)
+
                 raise RuntimeError("%s\nFailed to evaluate translation" %
                                    error_msg)
 
@@ -89,9 +95,6 @@ def validation(tparams, process_queue, translator_cmd, evaluator_cmd,
     except IOError:
         LOGGER.error('Translation cannot be found, so that BLEU set to 0')
         evaluation_score = (0., 0., 0., 0., 0.)
-
-    while not process_queue.empty():
-        process_queue.get()
 
     return (model, evaluation_score)
 
@@ -248,17 +251,24 @@ def train(experiment_id, model_options, data_options, validation_options,
     rt.start()
 
     def _timer_signal_handler(signum, frame):
-        print('Received SIGINT')
-        print('Now attempting to stop the timer')
+        LOGGER.info('Received SIGINT')
+        LOGGER.info('Now attempting to stop the timer')
         rt.stop()
 
-        print('Please wait to terminate all child processes')
+        LOGGER.info('Please wait for terminating all child processes')
         while not process_queue.empty():
             proc = process_queue.get()
-            proc.send_signal(signal.SIGINT)
-            proc.wait()
+            if proc.poll() is None:     # check if the process has terminated
+                # child process is still working
+                # LOGGER.info('Attempt to kill', proc.pid)
+                # terminate it by sending an interrupt signal
+                proc.send_signal(signal.SIGINT)
 
-        sys.exit(1)
+                # wait for child process while avoiding deadlock
+                # ignore outputs
+                proc.communicate()
+
+        sys.exit(130)
 
     signal.signal(signal.SIGINT, _timer_signal_handler)
 
@@ -376,6 +386,7 @@ def train(experiment_id, model_options, data_options, validation_options,
                 (ret_model, scores) = valid_ret_queue.get()
 
                 valid_bleu = scores[0]
+                # LOGGER.info('BLEU on the validation set: %.2f' % valid_bleu)
                 log_entry['validation_bleu'] = valid_bleu
 
                 if valid_bleu > best_score:

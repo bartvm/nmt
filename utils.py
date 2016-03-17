@@ -1,8 +1,11 @@
+from __future__ import print_function
+
 import theano
 from theano import tensor
 import warnings
 import six
 import pickle
+import sys
 
 import numpy
 import inspect
@@ -201,24 +204,39 @@ class RepeatedTimer(object):
                  *args, **kwargs):
         self._timer = None
         self._interval = interval
-        self.function = function
+        self.function = function  # function bound to the timer
+        # put return values of the function
         self._ret_queue = return_queue
         self.args = args
         self.kwargs = kwargs
-        self._is_running = False
+        self._is_running = False    # Is the timer running?
+        self._is_func_running = False
 
     def _run(self):
         self._is_running = False
-        self.start()
-        ret = self.function(*self.args, **self.kwargs)
-        self._ret_queue.put(ret)
+        self.start()    # set a new Timer with pre-specified interval
+
+        # check if the function is running
+        if not self._is_func_running:
+            self._is_func_running = True
+            try:
+                ret = self.function(*self.args, **self.kwargs)
+                self._ret_queue.put(ret)
+            except RuntimeError as err:
+                print(err, file=sys.stderr)
+
+                # stop the timer
+                self.stop()
+
+            self._is_func_running = False
 
     def start(self):
         if not self._is_running:
             self._timer = Timer(self._interval, self._run)
             self._timer.start()
-            self._is_running = True
+            self._is_running = True  # timer is running
 
     def stop(self):
         self._timer.cancel()
         self._is_running = False
+        self._is_func_running = False
