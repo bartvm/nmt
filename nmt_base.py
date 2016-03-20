@@ -230,8 +230,8 @@ def build_sampler(tparams, options, trng):
     ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim - 1)
 
     # get the input for decoder rnn initializer mlp
-    ctx_mean = ctx.mean(0)
-    # ctx_mean = concatenate([proj[0][-1],projr[0][-1]], axis=proj[0].ndim-2)
+    # ctx_mean = ctx.mean(0)
+    ctx_mean = concatenate([proj[0][-1], projr[0][-1]], axis=proj[0].ndim-2)
     init_state = get_layer('ff')[1](tparams,
                                     ctx_mean,
                                     options,
