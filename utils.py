@@ -6,6 +6,7 @@ import warnings
 import six
 import pickle
 import sys
+import itertools
 
 import numpy
 import inspect
@@ -240,3 +241,56 @@ class RepeatedTimer(object):
         self._timer.cancel()
         self._is_running = False
         self._is_func_running = False
+
+
+def prepare_character_tensor(cx):
+
+    def isplit(iterable, splitters):
+        return [list(g) for k, g in itertools.groupby(iterable,
+                lambda x:x in splitters) if not k]
+
+    # index of 'white space' is 2
+    # sents = [isplit(sent, (2,)) + [[0]] for sent in cx]
+    sents = [isplit(sent, (2,)) for sent in cx]
+    num_sents = len(cx)
+    num_words = numpy.max([len(sent) + 1 for sent in sents])
+
+    # word lengths in a batch of sentences
+    word_lengths = \
+        [
+            # assume the end of word token
+            [len(word)+1 for word in sent]
+            for sent in sents
+        ]
+
+    max_word_len = numpy.max(
+        [
+            w_len for w_lengths in word_lengths
+            for w_len in w_lengths
+        ])
+
+    chars = numpy.zeros(
+        [
+            max_word_len,
+            num_words,
+            num_sents
+        ], dtype='int64')
+
+    chars_mask = numpy.zeros(
+        [
+            max_word_len,
+            num_words,
+            num_sents
+        ], dtype='float32')
+
+    for sent_idx, sent in enumerate(sents):
+        for word_idx, word in enumerate(sent):
+            chars[:word_lengths[sent_idx][word_idx]-1,
+                  word_idx,
+                  sent_idx] = sents[sent_idx][word_idx]
+
+            chars_mask[:word_lengths[sent_idx][word_idx],
+                       word_idx,
+                       sent_idx] = 1.
+
+    return chars, chars_mask

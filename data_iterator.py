@@ -15,6 +15,7 @@ LOGGER = logging.getLogger(__name__)
 
 EOS_TOKEN = '<EOS>'  # 0
 UNK_TOKEN = '<UNK>'  # 1
+EOW_TOKEN = ' '     # 2, only for characters
 
 
 class Shuffle(Transformer):
@@ -22,8 +23,8 @@ class Shuffle(Transformer):
         if kwargs.get('iteration_scheme') is not None:
             raise ValueError
         super(Shuffle, self).__init__(
-                data_stream, produces_examples=data_stream.produces_examples,
-                **kwargs)
+            data_stream, produces_examples=data_stream.produces_examples,
+            **kwargs)
         self.buffer_size = buffer_size
         self.cache = [[] for _ in self.sources]
 
@@ -59,7 +60,7 @@ def _source_length(sentence_pair):
     target sentence.
 
     """
-    return len(sentence_pair[1])
+    return len(sentence_pair[3])
 
 
 def load_dict(filename, n_words=0):
@@ -70,12 +71,15 @@ def load_dict(filename, n_words=0):
             indices = range(len(dict_), n_words)
         else:
             indices = count(len(dict_))
-        dict_.update(zip(map(lambda x: x.split()[-1], f), indices))
+        dict_.update(zip(map(lambda x: x.rstrip('\n').split('\t')[-1], f),
+                     indices))
     return dict_
 
 
-def get_stream(source, target, source_dict, target_dict, batch_size,
-               buffer_multiplier=100, n_words_source=0, n_words_target=0,
+def get_stream(source, target, source_char_dict, source_word_dict,
+               target_char_dict, target_word_dict, batch_size,
+               buffer_multiplier=100, n_chars_source=0, n_words_source=0,
+               n_chars_target=0, n_words_target=0,
                max_src_length=None, max_trg_length=None):
     """Returns a stream over sentence pairs.
 
@@ -85,20 +89,29 @@ def get_stream(source, target, source_dict, target_dict, batch_size,
         A list of files to read source languages from.
     target : list
         A list of corresponding files in the target language.
-    source_dict : str
+    source_char_dict : str
         Path to a tab-delimited text file whose last column contains the
         vocabulary.
-    target_dict : str
-        See `source_dict`.
+    source_word_dict : str
+        See `source_char_dict`.
+    target_char_dict : str
+        See `source_char_dict`.
+    target_word_dict : str
+        See `source_char_dict`.
     batch_size : int
         The minibatch size.
     buffer_multiplier : int
         The number of batches to load, concatenate, sort by length of
         source sentence, and split again; this makes batches more uniform
         in their sentence length and hence more computationally efficient.
+    n_chars_source : int
+        The number of characters in the source vocabulary. Pass 0 (default) to
+        use the entire vocabulary.
     n_words_source : int
         The number of words in the source vocabulary. Pass 0 (default) to
         use the entire vocabulary.
+    n_chars_target : int
+        See `n_chars_source`.
     n_words_target : int
         See `n_words_source`.
 
@@ -107,24 +120,32 @@ def get_stream(source, target, source_dict, target_dict, batch_size,
         raise ValueError("number of source and target files don't match")
 
     # Read the dictionaries
-    dicts = [load_dict(source_dict, n_words=n_words_source),
-             load_dict(target_dict, n_words=n_words_target)]
+    dicts = [load_dict(source_char_dict, n_words=n_chars_source),
+             load_dict(source_word_dict, n_words=n_words_source),
+             load_dict(target_char_dict, n_words=n_chars_target),
+             load_dict(target_word_dict, n_words=n_words_target)]
 
     # Open the two sets of files and merge them
     streams = [
-        TextFile(source, dicts[0], bos_token=None,
-                 eos_token=EOS_TOKEN).get_example_stream(),
-        TextFile(target, dicts[1], bos_token=None,
-                 eos_token=EOS_TOKEN).get_example_stream()
+        TextFile(source, dicts[0], level='character', bos_token=None,
+                 eos_token=EOW_TOKEN, encoding='utf-8').get_example_stream(),
+        TextFile(source, dicts[1], bos_token=None,
+                 eos_token=EOS_TOKEN, encoding='utf-8').get_example_stream(),
+        TextFile(target, dicts[2], level='character', bos_token=None,
+                 eos_token=EOW_TOKEN, encoding='utf-8').get_example_stream(),
+        TextFile(target, dicts[3], bos_token=None,
+                 eos_token=EOS_TOKEN, encoding='utf-8').get_example_stream()
     ]
-    merged = Merge(streams, ('source', 'target'))
+    merged = Merge(streams, ('source_chars', 'source_words',
+                             'target_chars', 'target_words'))
 
     # Filter sentence lengths
     if max_src_length or max_trg_length:
         def filter_pair(pair):
-            src, trg = pair
-            src_ok = (not max_src_length) or len(src) < max_src_length
-            trg_ok = (not max_trg_length) or len(trg) < max_trg_length
+            src_chars, src_words, \
+                trg_chars, trg_words = pair
+            src_ok = (not max_src_length) or len(src_words) < max_src_length
+            trg_ok = (not max_trg_length) or len(trg_words) < max_trg_length
             return src_ok and trg_ok
         merged = Filter(merged, filter_pair)
 
@@ -136,20 +157,24 @@ def get_stream(source, target, source_dict, target_dict, batch_size,
     sorted_batches = Mapping(large_batches, SortMapping(_source_length))
     batches = Cache(sorted_batches, ConstantScheme(batch_size))
     shuffled_batches = Shuffle(batches, buffer_multiplier)
-    masked_batches = Padding(shuffled_batches)
+    masked_batches = Padding(shuffled_batches,
+                             mask_sources=('source_words', 'target_words'))
 
     return masked_batches
 
 
 def load_data(src, trg,
               valid_src, valid_trg,
-              src_vocab, trg_vocab,
-              n_words, n_words_src,
+              src_char_vocab, src_word_vocab,
+              trg_char_vocab, trg_word_vocab,
+              n_chars_src, n_words_src,
+              n_chars_trg, n_words_trg,
               batch_size, valid_batch_size,
               max_src_length, max_trg_length):
     LOGGER.info('Loading data')
 
-    dictionaries = [src_vocab, trg_vocab]
+    dictionaries = [src_char_vocab, src_word_vocab,
+                    trg_char_vocab, trg_word_vocab]
     datasets = [src, trg]
     valid_datasets = [valid_src, valid_trg]
 
@@ -166,8 +191,12 @@ def load_data(src, trg,
                               [datasets[1]],
                               dictionaries[0],
                               dictionaries[1],
+                              dictionaries[2],
+                              dictionaries[3],
+                              n_chars_source=n_chars_src,
                               n_words_source=n_words_src,
-                              n_words_target=n_words,
+                              n_chars_target=n_chars_trg,
+                              n_words_target=n_words_trg,
                               batch_size=batch_size,
                               max_src_length=max_src_length,
                               max_trg_length=max_trg_length)
@@ -175,8 +204,12 @@ def load_data(src, trg,
                               [valid_datasets[1]],
                               dictionaries[0],
                               dictionaries[1],
+                              dictionaries[2],
+                              dictionaries[3],
+                              n_chars_source=n_chars_src,
                               n_words_source=n_words_src,
-                              n_words_target=n_words,
+                              n_chars_target=n_chars_trg,
+                              n_words_target=n_words_trg,
                               batch_size=valid_batch_size)
 
     return worddicts_r, train_stream, valid_stream
