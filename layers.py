@@ -1,7 +1,7 @@
 import theano
 from theano import tensor
 import numpy
-from utils import uniform_weight, ortho_weight
+from utils import uniform_weight, ortho_weight, norm_weight
 
 
 def zero_vector(length):
@@ -35,14 +35,17 @@ def _gru(mask, x_t2gates, x_t2prpsl, h_tm1, U, Ux, activ=tensor.tanh):
 
     # if this time step is not valid, discard the current hidden states
     # obtained above and copy the previous hidden states to the current ones.
-    h_t = mask[:, None] * h_t + (1. - mask)[:, None] * h_tm1
+    if mask.ndim == 1:
+        h_t = mask[:, None] * h_t + (1. - mask)[:, None] * h_tm1
+    elif mask.ndim == 2:
+        h_t = mask[:, :, None] * h_t + (1. - mask)[:, :, None] * h_tm1
 
     return h_t
 
 
 def _compute_alignment(h_tm1,       # s_{i-1}
                        prj_annot,   # proj annotations: U_a * h_j for all j
-                       Wd_att, U_att, c_att,
+                       Wd_att, U_att,
                        context_mask=None):
 
     # W_a * s_{i-1}
@@ -51,8 +54,8 @@ def _compute_alignment(h_tm1,       # s_{i-1}
     # tanh(W_a * s_{i-1} + U_a * h_j) for all j
     nonlin_proj = tensor.tanh(prj_h_tm1[None, :, :] + prj_annot)
 
-    # v_a^{T} * tanh(.) + bias
-    alpha = tensor.dot(nonlin_proj, U_att) + c_att
+    # v_a^{T} * tanh(.)
+    alpha = tensor.dot(nonlin_proj, U_att)
     alpha = alpha.reshape([alpha.shape[0], alpha.shape[1]])
     alpha = tensor.exp(alpha - alpha.max(0, keepdims=True))
     if context_mask:
@@ -114,7 +117,13 @@ def gru_layer(tparams,
               options,
               prefix='gru',
               mask=None,
+              one_step=False,
+              init_state=None,
               **kwargs):
+
+    if one_step:
+        assert init_state, 'previous state must be provided'
+
     nsteps = state_below.shape[0]
     if state_below.ndim == 4:
         n_samples = state_below.shape[2]
@@ -137,21 +146,33 @@ def gru_layer(tparams,
     # prepare scan arguments
     seqs = [mask, state_below_, state_belowx]
 
-    if state_below.ndim == 4:
-        init_states = [tensor.alloc(0., state_below.shape[1], n_samples, dim)]
+    if init_state:
+        assert state_below.ndim - 1 == init_state.ndim, \
+            ('The provided initial state is assumed to have'
+             'one less dimension than the input. (%d - 1) != %d') \
+            % (state_below.ndim, init_state.ndim)
+        init_state = [init_state]
     else:
-        init_states = [tensor.alloc(0., n_samples, dim)]
+        if state_below.ndim == 4:
+            init_state = [tensor.alloc(0.,
+                                       state_below.shape[1],
+                                       n_samples, dim)]
+        else:
+            init_state = [tensor.alloc(0., n_samples, dim)]
 
     _step = _gru
     shared_vars = [tparams[prefix + '_U'], tparams[prefix + '_Ux']]
 
-    rval, updates = theano.scan(_step,
-                                sequences=seqs,
-                                outputs_info=init_states,
-                                non_sequences=shared_vars,
-                                name=prefix + '_layers',
-                                n_steps=nsteps,
-                                strict=True)
+    if one_step:
+        rval = _step(*(seqs + [init_state] + shared_vars))
+    else:
+        rval, updates = theano.scan(_step,
+                                    sequences=seqs,
+                                    outputs_info=init_state,
+                                    non_sequences=shared_vars,
+                                    name=prefix + '_layers',
+                                    n_steps=nsteps,
+                                    strict=True)
     rval = [rval]
     return rval
 
@@ -172,32 +193,21 @@ def param_init_gru_cond(options,
 
     param = param_init_gru(options, param, prefix=prefix, nin=nin, dim=dim)
 
-    param[prefix + '_U_nl'] = numpy.concatenate(
-        [
-            ortho_weight(dim_nonlin), ortho_weight(dim_nonlin)
-        ],
-        axis=1)
-    param[prefix + '_b_nl'] = zero_vector(2 * dim_nonlin)
-
-    param[prefix + '_Ux_nl'] = ortho_weight(dim_nonlin)
-    param[prefix + '_bx_nl'] = zero_vector(dim_nonlin)
-
     # context to LSTM
-    param[prefix + '_Wc'] = uniform_weight(dimctx, dim * 2)
-    param[prefix + '_Wcx'] = uniform_weight(dimctx, dim)
+    param[prefix + '_Wc'] = norm_weight(dimctx, dim * 2, ortho=False)
+    param[prefix + '_Wcx'] = norm_weight(dimctx, dim, ortho=False)
 
     # attention: combined -> hidden
-    param[prefix + '_W_comb_att'] = uniform_weight(dim, dimctx)
+    param[prefix + '_W_comb_att'] = norm_weight(dim, dimctx, ortho=False)
 
     # attention: context -> hidden
-    param[prefix + '_Wc_att'] = uniform_weight(dimctx, dimctx)
+    param[prefix + '_Wc_att'] = norm_weight(dimctx, dimctx, ortho=False)
 
     # attention: hidden bias
     param[prefix + '_b_att'] = zero_vector(dimctx)
 
     # attention:
-    param[prefix + '_U_att'] = uniform_weight(dimctx, 1)
-    param[prefix + '_c_att'] = zero_vector(1)
+    param[prefix + '_U_att'] = norm_weight(dimctx, 1, ortho=False)
 
     return param
 
@@ -229,7 +239,10 @@ def gru_cond_layer(tparams,
 
     # mask
     if mask is None:
-        mask = tensor.alloc(1., state_below.shape[0], 1)
+        if one_step:
+            mask = tensor.alloc(1., state_below.shape[0])
+        else:
+            mask = tensor.alloc(1., state_below.shape[0], 1)
 
     dim = tparams[prefix + '_Wcx'].shape[1]
 
@@ -254,34 +267,28 @@ def gru_cond_layer(tparams,
                     tparams[prefix + '_b'])
 
     def _step_slice(m_, x_, xx_, h_, ctx_, alpha_, pctx_, cc_, U, Wc,
-                    W_comb_att, U_att, c_att, Ux, Wcx, U_nl, Ux_nl, b_nl,
-                    bx_nl):
-
-        h1 = _gru(m_, x_, xx_, h_, U, Ux)
+                    W_comb_att, U_att, Ux, Wcx):
 
         # attention
-        alpha = _compute_alignment(h1, pctx_,
-                                   W_comb_att, U_att, c_att,
+        alpha = _compute_alignment(h_, pctx_,
+                                   W_comb_att, U_att,
                                    context_mask=context_mask)
 
         ctx_ = (cc_ * alpha[:, :, None]).sum(0)  # current context
 
-        new_x_ = tensor.dot(ctx_, Wc) + b_nl
-        new_xx_ = tensor.dot(ctx_, Wcx) + bx_nl
+        new_x_ = x_ + tensor.dot(ctx_, Wc)
+        new_xx_ = xx_ + tensor.dot(ctx_, Wcx)
 
-        h2 = _gru(m_, new_x_, new_xx_, h1, U_nl, Ux_nl)
+        h = _gru(m_, new_x_, new_xx_, h_, U, Ux)
 
-        return h2, ctx_, alpha.T  # pstate_, preact, preactx, r, u
+        return h, ctx_, alpha.T  # pstate_, preact, preactx, r, u
 
     seqs = [mask, state_below_, state_belowx]
     _step = _step_slice
 
     shared_vars = [tparams[prefix + '_U'], tparams[prefix + '_Wc'],
                    tparams[prefix + '_W_comb_att'], tparams[prefix + '_U_att'],
-                   tparams[prefix + '_c_att'], tparams[prefix + '_Ux'],
-                   tparams[prefix + '_Wcx'], tparams[prefix + '_U_nl'],
-                   tparams[prefix + '_Ux_nl'], tparams[prefix + '_b_nl'],
-                   tparams[prefix + '_bx_nl']]
+                   tparams[prefix + '_Ux'], tparams[prefix + '_Wcx']]
 
     if one_step:
         rval = _step(*(
