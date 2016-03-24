@@ -4,6 +4,8 @@ Build a neural machine translation model with soft attention
 import copy
 import logging
 import os
+import io
+import subprocess
 from collections import OrderedDict
 
 import numpy
@@ -12,10 +14,127 @@ from six.moves import xrange
 from theano import tensor
 from theano.sandbox.rng_mrg import MRG_RandomStreams
 
-from utils import dropout_layer, norm_weight, concatenate
+from utils import (dropout_layer, norm_weight, concatenate,
+                   unzip, RepeatedTimer)
 from layers import get_layer
 
 LOGGER = logging.getLogger(__name__)
+
+
+def validation(tparams, process_queue, translator_cmd, evaluator_cmd,
+               model_filename, trans_valid_src):
+
+    # We need to make sure that the model remains unchanged during evaluation
+    model = unzip(tparams)
+    save_params(model, model_filename)
+
+    # Translation runs on CPUs with BLAS
+    env_THEANO_FLAGS = 'device=cpu,floatX=%s,optimizer=%s' % (
+        theano.config.floatX,
+        theano.config.optimizer)
+
+    env = dict(os.environ, **{'OMP_NUM_THREADS': '1',
+                              'THEANO_FLAGS': env_THEANO_FLAGS})
+
+    trans_proc = subprocess.Popen(translator_cmd, env=env,
+                                  stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE)
+
+    # put the process into the queue for signal handling
+    process_queue.put(trans_proc)
+
+    output_msg, error_msg = trans_proc.communicate()
+
+    process_queue.get()
+
+    if trans_proc.returncode == 1:
+        raise RuntimeError("%s\nFailed to translate sentences" % error_msg)
+
+    try:
+        with io.open(trans_valid_src, 'r') as trans_result_f:
+            eval_proc = subprocess.Popen(evaluator_cmd,
+                                         stdin=trans_result_f,
+                                         stdout=subprocess.PIPE,
+                                         stderr=subprocess.PIPE)
+
+            process_queue.put(eval_proc)
+
+            # sample output:
+            # BLEU = 100.00, 100.0/100.0/100.0/100.0
+            # extra part of the output is ignored.
+
+            out_msg, err_msg = eval_proc.communicate()
+
+            process_queue.get()
+
+            if eval_proc.returncode == 1:
+
+                os.remove(trans_valid_src)
+
+                raise RuntimeError("%s\nFailed to evaluate translation" %
+                                   error_msg)
+
+            overall_bleu_score = float(out_msg.split(',')[0].split('=')[1])
+            bleu_n = [float(score) for score in out_msg.split()[3].split('/')]
+            bleu_1, bleu_2, bleu_3, bleu_4 = bleu_n
+
+            evaluation_score = (overall_bleu_score,
+                                bleu_1, bleu_2, bleu_3, bleu_4)
+
+            os.remove(trans_valid_src)
+
+    except IOError:
+        LOGGER.error('Translation cannot be found, so that BLEU set to 0')
+        evaluation_score = (0., 0., 0., 0., 0.)
+
+    return (model, evaluation_score)
+
+
+def prepare_validation_timer(tparams,
+                             process_queue,
+                             model_filename,
+                             model_option_filename,
+                             eval_intv,
+                             valid_ret_queue,
+                             translator,
+                             evaluator,
+                             nproc,
+                             beam_size,
+                             src_vocab,
+                             trg_vocab,
+                             valid_src,
+                             valid_trg,
+                             trans_valid_src):
+
+    translator_cmd = [
+        "python",
+        translator,
+        "-p", str(nproc),
+        "-k", str(beam_size),
+        "-n",
+        "-u",
+        model_filename,
+        model_option_filename,
+        src_vocab,
+        trg_vocab,
+        valid_src,
+        trans_valid_src,
+    ]
+
+    evaluator_cmd = [
+        "perl",
+        evaluator,
+        valid_trg,
+    ]
+
+    args = (tparams, process_queue)
+    kwargs = {'translator_cmd': translator_cmd,
+              'evaluator_cmd': evaluator_cmd,
+              'model_filename': model_filename,
+              'trans_valid_src': trans_valid_src}
+
+    return RepeatedTimer(eval_intv*60, validation, valid_ret_queue,
+                         *args, **kwargs)
 
 
 # initialize all parameters
