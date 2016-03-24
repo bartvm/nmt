@@ -16,18 +16,27 @@ from six.moves import xrange
 
 from data_iterator import (load_dict, EOS_TOKEN, UNK_TOKEN)
 from nmt_base import (build_sampler, gen_sample, init_params)
-from utils import (load_params, init_tparams)
+from utils import (load_params, init_tparams, prepare_character_tensor)
 
 
 # utility function
-def _send_jobs(fname, queue, word_dict, n_words_src):
+def _send_jobs(fname, queue, char_dict_src, word_dict_src,
+               n_chars_src, n_words_src):
     with io.open(fname, 'r') as f:
         for idx, line in enumerate(f):
-            words = line.strip().split()
+            line = line.strip()
+            words = line.split()
             words += [EOS_TOKEN]
-            x = map(lambda w: word_dict[w] if w in word_dict else 1, words)
+            line += ' '
+            x = map(lambda w: word_dict_src[w] if w in word_dict_src else 1,
+                    words)
             x = map(lambda ii: ii if ii < n_words_src else 1, x)
-            queue.put((idx, x, words))
+
+            xc = map(lambda c: char_dict_src[c] if c in char_dict_src else 1,
+                     line)
+            xc = [map(lambda ii: ii if ii < n_chars_src else 1, xc)]
+
+            queue.put((idx, xc, x, words))
     return idx+1
 
 
@@ -64,13 +73,23 @@ def translate_model(exit_event, queue, rqueue, pid, i2w_trg,
             words.append(word_idict_trg[w])
         return words
 
-    def _translate(seq):
-        seq = numpy.array(seq).reshape([len(seq), 1])
+    def _translate(xc, xc_mask, x):
+        x = numpy.array(x).reshape([len(x), 1])
+        x_mask = numpy.ones_like(x)
+
+        assert x.shape[0] == xc.shape[1]
+        assert x.ndim == 2
+        assert xc.ndim == 3
+        assert xc_mask.ndim == 3
 
         # sample given an input sequence and obtain scores
         samples, alignments, scores = gen_sample(tparams, f_init, f_next,
-                                                 seq, options, trng=trng,
-                                                 k=k, maxlen=100,
+                                                 xc,
+                                                 xc_mask,
+                                                 x,
+                                                 x_mask,
+                                                 options, trng=trng,
+                                                 k=k, maxlen=200,
                                                  stochastic=False,
                                                  argmax=False)
 
@@ -97,10 +116,14 @@ def translate_model(exit_event, queue, rqueue, pid, i2w_trg,
             break
 
         # idx: sentence index
+        # xc: a sequence of character sequences
         # x: a sequence of word indices
         # src_words: original source sentence
-        idx, x, src_words = req[0], req[1], req[2]
-        seq, alignment = _translate(x)
+        idx, xc, x, src_words = req
+
+        xc, xc_mask = prepare_character_tensor(xc)
+
+        seq, alignment = _translate(xc, xc_mask, x)
 
         assert len(seq) == len(alignment)
 
@@ -122,7 +145,9 @@ def translate_model(exit_event, queue, rqueue, pid, i2w_trg,
     return
 
 
-def main(model_path, option_path, dictionary_source, dictionary_target,
+def main(model_path, option_path,
+         char_vocab_src, word_vocab_src,
+         char_vocab_trg, word_vocab_trg,
          source_file, saveto, k=5, normalize=False, unk_replace=False,
          n_process=5):
 
@@ -133,16 +158,15 @@ def main(model_path, option_path, dictionary_source, dictionary_target,
     options = config['model']
 
     # load source dictionary and invert
-    word_dict = load_dict(dictionary_source, n_words=options['n_words_src'])
-    word_idict = dict()
-    for kk, vv in word_dict.iteritems():
-        word_idict[vv] = kk
+    char_dict_src = load_dict(char_vocab_src, n_words=options['n_chars_src'])
+    word_dict_src = load_dict(word_vocab_src, n_words=options['n_words_src'])
+    # word_idict_src = dict([(vv, kk) for kk, vv in word_dict.iteritems()])
 
     # load target dictionary and invert
-    word_dict_trg = load_dict(dictionary_target, n_words=options['n_words'])
-    word_idict_trg = dict()
-    for kk, vv in word_dict_trg.iteritems():
-        word_idict_trg[vv] = kk
+    # char_dict_trg = load_dict(char_vocab_trg, n_chars=options['n_chars_trg'])
+    # char_idict_trg = dict([(vv, kk) for kk, vv in char_dict_trg.iteritems()])
+    word_dict_trg = load_dict(word_vocab_trg, n_words=options['n_words_trg'])
+    word_idict_trg = dict([(vv, kk) for kk, vv in word_dict_trg.iteritems()])
 
     default_sigint_handler = signal.getsignal(signal.SIGINT)
 
@@ -157,7 +181,9 @@ def main(model_path, option_path, dictionary_source, dictionary_target,
     # put all of the sentences into the producer queue
     n_samples = _send_jobs(source_file,
                            queue,
-                           word_dict,
+                           char_dict_src,
+                           word_dict_src,
+                           options['n_chars_src'],
                            options['n_words_src'])
 
     # add sentinel values into the producer queue
@@ -226,14 +252,17 @@ if __name__ == "__main__":
     parser.add_argument('-u', action="store_true", default=False)
     parser.add_argument('model_path', type=str)
     parser.add_argument('option_path', type=str)
-    parser.add_argument('dictionary_source', type=str)
-    parser.add_argument('dictionary_target', type=str)
+    parser.add_argument('char_vocab_src', type=str)
+    parser.add_argument('word_vocab_src', type=str)
+    parser.add_argument('char_vocab_trg', type=str)
+    parser.add_argument('word_vocab_trg', type=str)
     parser.add_argument('source', type=str)
     parser.add_argument('saveto', type=str)
 
     args = parser.parse_args()
 
     main(args.model_path, args.option_path,
-         args.dictionary_source, args.dictionary_target,
+         args.char_vocab_src, args.word_vocab_src,
+         args.char_vocab_trg, args.word_vocab_trg,
          args.source, args.saveto, k=args.k, normalize=args.n,
          unk_replace=args.u, n_process=args.p)
