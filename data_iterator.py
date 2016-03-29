@@ -22,8 +22,8 @@ class Shuffle(Transformer):
         if kwargs.get('iteration_scheme') is not None:
             raise ValueError
         super(Shuffle, self).__init__(
-                data_stream, produces_examples=data_stream.produces_examples,
-                **kwargs)
+            data_stream, produces_examples=data_stream.produces_examples,
+            **kwargs)
         self.buffer_size = buffer_size
         self.cache = [[] for _ in self.sources]
 
@@ -113,9 +113,9 @@ def get_stream(source, target, source_dict, target_dict, batch_size,
     # Open the two sets of files and merge them
     streams = [
         TextFile(source, dicts[0], bos_token=None,
-                 eos_token=EOS_TOKEN).get_example_stream(),
+                 eos_token=EOS_TOKEN, encoding='utf-8').get_example_stream(),
         TextFile(target, dicts[1], bos_token=None,
-                 eos_token=EOS_TOKEN).get_example_stream()
+                 eos_token=EOS_TOKEN, encoding='utf-8').get_example_stream()
     ]
     merged = Merge(streams, ('source', 'target'))
 
