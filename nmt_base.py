@@ -1,7 +1,10 @@
 '''
 Build a neural machine translation model with soft attention
 '''
-import copy
+from __future__ import division
+
+import io
+import subprocess
 import logging
 import os
 from collections import OrderedDict
@@ -12,73 +15,303 @@ from six.moves import xrange
 from theano import tensor
 from theano.sandbox.rng_mrg import MRG_RandomStreams
 
-from utils import dropout_layer, norm_weight, concatenate
+from utils import (unzip, RepeatedTimer,
+                   dropout_layer, norm_weight, concatenate,
+                   prepare_character_tensor, beam_search)
 from layers import get_layer
 
 LOGGER = logging.getLogger(__name__)
+
+
+def validation(tparams, process_queue, translator_cmd, evaluator_cmd,
+               model_filename, trans_valid_src):
+
+    # We need to make sure that the model remains unchanged during evaluation
+    model = unzip(tparams)
+    save_params(model, model_filename)
+
+    # Translation runs on CPUs with BLAS
+    env_THEANO_FLAGS = 'device=cpu,floatX=%s,optimizer=%s' % (
+        theano.config.floatX,
+        theano.config.optimizer)
+
+    env = dict(os.environ, **{'OMP_NUM_THREADS': '1',
+                              'THEANO_FLAGS': env_THEANO_FLAGS})
+
+    trans_proc = subprocess.Popen(translator_cmd, env=env,
+                                  stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE)
+
+    # put the process into the queue for signal handling
+    process_queue.put(trans_proc)
+
+    output_msg, error_msg = trans_proc.communicate()
+
+    process_queue.get()
+
+    if trans_proc.returncode == 1:
+        raise RuntimeError("%s\nFailed to translate sentences" % error_msg)
+
+    try:
+        with io.open(trans_valid_src, 'r') as trans_result_f:
+            eval_proc = subprocess.Popen(evaluator_cmd,
+                                         stdin=trans_result_f,
+                                         stdout=subprocess.PIPE,
+                                         stderr=subprocess.PIPE)
+
+            process_queue.put(eval_proc)
+
+            # sample output:
+            # BLEU = 100.00, 100.0/100.0/100.0/100.0
+            # extra part of the output is ignored.
+
+            out_msg, err_msg = eval_proc.communicate()
+
+            process_queue.get()
+
+            if eval_proc.returncode == 1:
+
+                os.remove(trans_valid_src)
+
+                raise RuntimeError("%s\nFailed to evaluate translation" %
+                                   error_msg)
+
+            overall_bleu_score = float(out_msg.split(',')[0].split('=')[1])
+            bleu_n = [float(score) for score in out_msg.split()[3].split('/')]
+            bleu_1, bleu_2, bleu_3, bleu_4 = bleu_n
+
+            evaluation_score = (overall_bleu_score,
+                                bleu_1, bleu_2, bleu_3, bleu_4)
+
+            os.remove(trans_valid_src)
+
+    except IOError:
+        # LOGGER.error('Translation cannot be found, so that BLEU set to 0')
+        evaluation_score = (0., 0., 0., 0., 0.)
+
+    return (model, evaluation_score)
+
+
+def prepare_validation_timer(tparams,
+                             process_queue,
+                             model_filename,
+                             model_option_filename,
+                             eval_intv,
+                             valid_ret_queue,
+                             translator,
+                             evaluator,
+                             nproc,
+                             beam_size,
+                             src_char_vocab,
+                             src_word_vocab,
+                             trg_char_vocab,
+                             trg_word_vocab,
+                             valid_src,
+                             valid_trg,
+                             trans_valid_src):
+
+    translator_cmd = [
+        "python",
+        translator,
+        "-p", str(nproc),
+        "-k", str(beam_size),
+        "-n",
+        "-u",
+        model_filename,
+        model_option_filename,
+        src_char_vocab,
+        src_word_vocab,
+        trg_char_vocab,
+        trg_word_vocab,
+        valid_src,
+        trans_valid_src,
+    ]
+
+    evaluator_cmd = [
+        "perl",
+        evaluator,
+        valid_trg,
+    ]
+
+    args = (tparams, process_queue)
+    kwargs = {'translator_cmd': translator_cmd,
+              'evaluator_cmd': evaluator_cmd,
+              'model_filename': model_filename,
+              'trans_valid_src': trans_valid_src}
+
+    return RepeatedTimer(eval_intv*60, validation, valid_ret_queue,
+                         *args, **kwargs)
 
 
 # initialize all parameters
 def init_params(options):
     params = OrderedDict()
 
-    # embedding
-    params['Wemb'] = norm_weight(options['n_words_src'],
-                                 options['dim_word_src'])
-    params['Wemb_dec'] = norm_weight(options['n_words'],
-                                     options['dim_word_trg'])
+    # character embedding
+    params['Cemb'] = norm_weight(options['n_chars_src'],
+                                 options['dim_char_src'],
+                                 scale=1/numpy.sqrt(options['n_chars_src']))
+    params['Cemb_dec'] = norm_weight(options['n_chars_trg'],
+                                     options['dim_char_trg'],
+                                     scale=1/numpy.sqrt(
+                                         options['n_chars_trg']))
 
-    # encoder: bidirectional RNN
+    # word embedding
+    params['Wemb'] = norm_weight(options['n_words_src'],
+                                 options['dim_word_src'],
+                                 scale=1/numpy.sqrt(options['n_words_src']))
+    params['Wemb_dec'] = norm_weight(options['n_words_trg'],
+                                     options['dim_word_trg'],
+                                     scale=1/numpy.sqrt(
+                                         options['n_words_trg']))
+
+    # bidirectional RNN encoder for characters in a SOURCE word
     params = get_layer(options['encoder'])[0](options,
                                               params,
-                                              prefix='encoder',
+                                              prefix='char_enc_src',
+                                              nin=options['dim_char_src'],
+                                              dim=options['char_hid'])
+    params = get_layer(options['encoder'])[0](options,
+                                              params,
+                                              prefix='char_enc_src_r',
+                                              nin=options['dim_char_src'],
+                                              dim=options['char_hid'])
+
+    # bidirectional RNN encoder for characters in a TARGET word
+    params = get_layer(options['encoder'])[0](options,
+                                              params,
+                                              prefix='char_enc_trg',
+                                              nin=options['dim_char_trg'],
+                                              dim=options['char_hid'])
+    params = get_layer(options['encoder'])[0](options,
+                                              params,
+                                              prefix='char_enc_trg_r',
+                                              nin=options['dim_char_trg'],
+                                              dim=options['char_hid'])
+
+    # non-linear mapping of character embeddings to word embeddings
+    params = get_layer('ff')[0](options, params, prefix='char2word_src',
+                                nin=options['char_hid']*2,
+                                nout=options['dim_word_src'])
+    params = get_layer('ff')[0](options, params, prefix='char2word_src_r',
+                                nin=options['char_hid']*2,
+                                nout=options['dim_word_src'])
+    params = get_layer('ff')[0](options, params, prefix='char2word_trg',
+                                nin=options['char_hid']*2,
+                                nout=options['dim_word_trg'])
+
+    # (soft) gate to select embeddings
+    params = get_layer('ff')[0](options, params, prefix='word_gate_src',
+                                nin=options['dim_word_src'],
+                                nout=options['dim_word_src'])
+    params = get_layer('ff')[0](options, params, prefix='word_gate_src_r',
+                                nin=options['dim_word_src'],
+                                nout=options['dim_word_src'])
+    params = get_layer('ff')[0](options, params, prefix='word_gate_trg',
+                                nin=options['dim_word_trg'],
+                                nout=options['dim_word_trg'])
+
+    # encoder: bidirectional RNN for source words
+    params = get_layer(options['encoder'])[0](options,
+                                              params,
+                                              prefix='word_encoder',
                                               nin=options['dim_word_src'],
                                               dim=options['dim'])
     params = get_layer(options['encoder'])[0](options,
                                               params,
-                                              prefix='encoder_r',
+                                              prefix='word_encoder_r',
                                               nin=options['dim_word_src'],
                                               dim=options['dim'])
     ctxdim = 2 * options['dim']
 
-    # init_state, init_cell
+    # init_state
     params = get_layer('ff')[0](options,
                                 params,
-                                prefix='ff_state',
+                                prefix='ff_word_state',
                                 nin=ctxdim,
                                 nout=options['dim'])
-    # decoder
+    params = get_layer('ff')[0](options,
+                                params,
+                                prefix='ff_char_state',
+                                nin=options['dim'],
+                                nout=options['char_hid'])
+
+    # decoder for target words
     params = get_layer(options['decoder'])[0](options,
                                               params,
-                                              prefix='decoder',
+                                              prefix='word_decoder',
                                               nin=options['dim_word_trg'],
                                               dim=options['dim'],
                                               dimctx=ctxdim)
+    # decoder for target characters
+    # XXX character decoder doesn't need alignment when computing hidden states
+    params = get_layer(options['encoder'])[0](options,
+                                              params,
+                                              prefix='char_decoder',
+                                              nin=options['dim_char_trg'],
+                                              dim=options['char_hid'])
     # readout
     params = get_layer('ff')[0](options,
                                 params,
-                                prefix='ff_logit_lstm',
+                                prefix='ff_word_logit_lstm',
                                 nin=options['dim'],
                                 nout=options['dim_word_trg'],
                                 ortho=False)
     params = get_layer('ff')[0](options,
                                 params,
-                                prefix='ff_logit_prev',
+                                prefix='ff_word_logit_prev_w',
                                 nin=options['dim_word_trg'],
                                 nout=options['dim_word_trg'],
                                 ortho=False)
     params = get_layer('ff')[0](options,
                                 params,
-                                prefix='ff_logit_ctx',
+                                prefix='ff_word_logit_prev_c',
+                                nin=options['dim_word_trg'],
+                                nout=options['dim_word_trg'],
+                                ortho=False)
+    params = get_layer('ff')[0](options,
+                                params,
+                                prefix='ff_word_logit_ctx',
                                 nin=ctxdim,
                                 nout=options['dim_word_trg'],
                                 ortho=False)
     params = get_layer('ff')[0](options,
                                 params,
-                                prefix='ff_logit',
+                                prefix='ff_word_logit',
+                                # nin=int(options['dim_word_trg']/2),
                                 nin=options['dim_word_trg'],
-                                nout=options['n_words'])
+                                nout=options['n_words_trg'])
 
+    params = get_layer('ff')[0](options,
+                                params,
+                                prefix='ff_char_logit_lstm',
+                                nin=options['char_hid'],
+                                nout=options['dim_char_trg'],
+                                ortho=False)
+    params = get_layer('ff')[0](options,
+                                params,
+                                prefix='ff_char_logit_prev_c',
+                                nin=options['dim_char_trg'],
+                                nout=options['dim_char_trg'],
+                                ortho=False)
+    params = get_layer('ff')[0](options,
+                                params,
+                                prefix='ff_char_logit_cur_w',
+                                nin=options['dim_word_trg'],
+                                nout=options['dim_char_trg'],
+                                ortho=False)
+    params = get_layer('ff')[0](options,
+                                params,
+                                prefix='ff_char_logit_prev_cemb',
+                                nin=options['dim_word_trg'],
+                                nout=options['dim_char_trg'],
+                                ortho=False)
+    params = get_layer('ff')[0](options,
+                                params,
+                                prefix='ff_char_logit',
+                                # nin=int(options['dim_char_trg']/2),
+                                nin=options['dim_char_trg'],
+                                nout=options['n_chars_trg'])
     return params
 
 
@@ -90,228 +323,708 @@ def build_model(tparams, options):
     use_noise = theano.shared(numpy.float32(0.))
 
     # description string: #words x #samples
+    xc = tensor.tensor3('xc', dtype='int64')
+    xc_mask = tensor.tensor3('xc_mask', dtype='float32')
     x = tensor.matrix('x', dtype='int64')
     x_mask = tensor.matrix('x_mask', dtype='float32')
+    yc = tensor.tensor3('yc', dtype='int64')
+    yc_mask = tensor.tensor3('yc_mask', dtype='float32')
     y = tensor.matrix('y', dtype='int64')
     y_mask = tensor.matrix('y_mask', dtype='float32')
 
     # for the backward rnn, we just need to invert x and x_mask
-    xr = x[::-1]
+    xcr = xc[::-1]  # reverse characters; word order is intact
+    xcr_mask = xc_mask[::-1]
+    xr = x[::-1]    # reverse words
     xr_mask = x_mask[::-1]
+    ycr = yc[::-1]
+    ycr_mask = yc_mask[::-1]
 
-    n_timesteps = x.shape[0]
-    n_timesteps_trg = y.shape[0]
+    n_chars_src = xc.shape[0]
+    n_words_src = x.shape[0]
+    n_chars_trg = yc.shape[0]
+    n_words_trg = y.shape[0]
     n_samples = x.shape[1]
 
+    # extract character embeddings
+    cemb_src = tparams['Cemb'][xc.flatten()]
+    cemb_src = cemb_src.reshape(
+        [
+            n_chars_src,
+            n_words_src,
+            n_samples,
+            options['dim_char_src']
+        ]
+    )
+
+    # compute hidden states of character embeddings in the source language
+    cproj_src = get_layer(options['encoder'])[1](tparams,
+                                                 cemb_src,
+                                                 options,
+                                                 prefix='char_enc_src',
+                                                 mask=xc_mask)
+    # repeate the above steps for reverse characters
+    # NOTE word order does NOT change
+    cembr_src = tparams['Cemb'][xcr.flatten()]
+    cembr_src = cembr_src.reshape(
+        [
+            n_chars_src,
+            n_words_src,
+            n_samples,
+            options['dim_char_src']
+        ]
+    )
+    cprojr_src = get_layer(options['encoder'])[1](tparams,
+                                                  cembr_src,
+                                                  options,
+                                                  prefix='char_enc_src_r',
+                                                  mask=xcr_mask)
+
+    cproj_comb_src = concatenate([cproj_src[0][-1], cprojr_src[0][-1]],
+                                 axis=cproj_src[0].ndim-2)
+    # word representations from characters in a reverse order
+    cprojr_comb_src = cproj_comb_src[::-1]
+
+    cproj_comb_src = get_layer('ff')[1](tparams, cproj_comb_src, options,
+                                        prefix='char2word_src', activ=None)
+    cprojr_comb_src = get_layer('ff')[1](tparams, cprojr_comb_src, options,
+                                         prefix='char2word_src_r', activ=None)
+
     # word embedding for forward rnn (source)
-    emb = tparams['Wemb'][x.flatten()]
-    emb = emb.reshape([n_timesteps, n_samples, options['dim_word_src']])
-    proj = get_layer(options['encoder'])[1](tparams,
-                                            emb,
-                                            options,
-                                            prefix='encoder',
-                                            mask=x_mask)
+    wemb_src = tparams['Wemb'][x.flatten()]
+    wemb_src = wemb_src.reshape([n_words_src, n_samples,
+                                 options['dim_word_src']])
+
+    word_gate_src = get_layer('ff')[1](tparams, wemb_src, options,
+                                       prefix='word_gate_src',
+                                       activ=tensor.nnet.sigmoid)
+
+    # hidden states for new word embeddings for the forward rnn
+    src_inp = word_gate_src * wemb_src + (1 - word_gate_src) * cproj_comb_src
+
     # word embedding for backward rnn (source)
-    embr = tparams['Wemb'][xr.flatten()]
-    embr = embr.reshape([n_timesteps, n_samples, options['dim_word_src']])
-    projr = get_layer(options['encoder'])[1](tparams,
-                                             embr,
-                                             options,
-                                             prefix='encoder_r',
-                                             mask=xr_mask)
+    wembr_src = tparams['Wemb'][xr.flatten()]
+    wembr_src = wembr_src.reshape([n_words_src, n_samples,
+                                   options['dim_word_src']])
+
+    word_gate_src_r = get_layer('ff')[1](tparams, wembr_src, options,
+                                         prefix='word_gate_src_r',
+                                         activ=tensor.nnet.sigmoid)
+
+    # hidden states for new word embeddings for the backward rnn
+    src_inpr = word_gate_src_r * wembr_src + \
+        (1 - word_gate_src_r) * cprojr_comb_src
+
+    src_proj = get_layer(options['encoder'])[1](tparams,
+                                                src_inp,
+                                                options,
+                                                prefix='word_encoder',
+                                                mask=x_mask)
+    src_projr = get_layer(options['encoder'])[1](tparams,
+                                                 src_inpr,
+                                                 options,
+                                                 prefix='word_encoder_r',
+                                                 mask=xr_mask)
 
     # context will be the concatenation of forward and backward rnns
-    ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim - 1)
+    ctx = concatenate([src_proj[0], src_projr[0][::-1]],
+                      axis=src_proj[0].ndim - 1)
 
     # mean of the context (across time) will be used to initialize decoder rnn
     # ctx_mean = (ctx * x_mask[:, :, None]).sum(0) / x_mask.sum(0)[:, None]
 
     # or you can use the last state of forward + backward encoder rnns
-    ctx_mean = concatenate([proj[0][-1], projr[0][-1]], axis=proj[0].ndim-2)
+    ctx_mean = concatenate([src_proj[0][-1], src_projr[0][-1]],
+                           axis=src_proj[0].ndim-2)
 
     # initial decoder state
     init_state = get_layer('ff')[1](tparams,
                                     ctx_mean,
                                     options,
-                                    prefix='ff_state',
+                                    prefix='ff_word_state',
                                     activ=tensor.tanh)
 
-    # word embedding (target), we will shift the target sequence one time step
+    # character embedding in the target language
+    cemb_trg = tparams['Cemb_dec'][yc.flatten()]
+    cemb_trg = cemb_trg.reshape(
+        [
+            n_chars_trg,
+            n_words_trg,
+            n_samples,
+            options['dim_char_trg']
+        ]
+    )
+
+    # hidden states of character embeddings in the target language
+    cproj_trg = get_layer(options['encoder'])[1](tparams,
+                                                 cemb_trg,
+                                                 options,
+                                                 prefix='char_enc_trg',
+                                                 mask=yc_mask)
+
+    # repeat for the reverse characters
+    cembr_trg = tparams['Cemb_dec'][ycr.flatten()]
+    cembr_trg = cembr_trg.reshape(
+        [
+            n_chars_trg,
+            n_words_trg,
+            n_samples,
+            options['dim_char_trg']
+        ]
+    )
+
+    # hidden states of character embeddings in the target language
+    cprojr_trg = get_layer(options['encoder'])[1](tparams,
+                                                  cembr_trg,
+                                                  options,
+                                                  prefix='char_enc_trg_r',
+                                                  mask=ycr_mask)
+
+    # pick the last state to represent words in the forward chain of words
+    cproj_comb_trg = concatenate([cproj_trg[0][-1], cprojr_trg[0][-1]],
+                                 axis=cproj_trg[0].ndim-2)
+
+    cproj_comb_trg = get_layer('ff')[1](tparams, cproj_comb_trg, options,
+                                        prefix='char2word_trg', activ=None)
+
+    # word embedding (target)
+    wemb_trg = tparams['Wemb_dec'][y.flatten()]
+    wemb_trg = wemb_trg.reshape([n_words_trg, n_samples,
+                                options['dim_word_trg']])
+
+    word_gate_trg = get_layer('ff')[1](tparams, wemb_trg, options,
+                                       prefix='word_gate_trg',
+                                       activ=tensor.nnet.sigmoid)
+
+    trg_inp = word_gate_trg * wemb_trg + (1 - word_gate_trg) * cproj_comb_trg
+
+    # We will shift the target sequence one time step
     # to the right. This is done because of the bi-gram connections in the
     # readout and decoder rnn. The first target will be all zeros and we will
     # not condition on the last output.
-    emb = tparams['Wemb_dec'][y.flatten()]
-    emb = emb.reshape([n_timesteps_trg, n_samples, options['dim_word_trg']])
-    emb_shifted = tensor.zeros_like(emb)
-    emb_shifted = tensor.set_subtensor(emb_shifted[1:], emb[:-1])
-    emb = emb_shifted
+    trg_inp_shifted = tensor.zeros_like(trg_inp)
+    trg_inp_shifted = tensor.set_subtensor(trg_inp_shifted[1:], trg_inp[:-1])
+    trg_inp = trg_inp_shifted
+
+    # shift word vectors to the right
+    wemb_trg_shifted = tensor.zeros_like(wemb_trg)
+    wemb_trg_shifted = tensor.set_subtensor(wemb_trg_shifted[1:],
+                                            wemb_trg[:-1])
+    wemb_trg = wemb_trg_shifted
+
+    # shift character embeddings to the right
+    cproj_comb_trg_shifted = tensor.zeros_like(cproj_comb_trg)
+    cproj_comb_trg_shifted = tensor.set_subtensor(cproj_comb_trg_shifted[1:],
+                                                  cproj_comb_trg[:-1])
+    cproj_comb_trg = cproj_comb_trg_shifted
 
     # decoder - pass through the decoder conditional gru with attention
-    proj = get_layer(options['decoder'])[1](tparams,
-                                            emb,
-                                            options,
-                                            prefix='decoder',
-                                            mask=y_mask,
-                                            context=ctx,
-                                            context_mask=x_mask,
-                                            one_step=False,
-                                            init_state=init_state)
+    trg_proj = get_layer(options['decoder'])[1](tparams,
+                                                trg_inp,
+                                                options,
+                                                prefix='word_decoder',
+                                                mask=y_mask,
+                                                context=ctx,
+                                                context_mask=x_mask,
+                                                one_step=False,
+                                                init_state=init_state)
     # hidden states of the decoder gru
-    proj_h = proj[0]
+    proj_h = trg_proj[0]
 
     # weighted averages of context, generated by attention module
-    ctxs = proj[1]
+    ctxs = trg_proj[1]
 
     # weights (alignment matrix)
-    opt_ret['dec_alphas'] = proj[2]
+    # num trg words x batch size x num src words
+    opt_ret['dec_alphas'] = trg_proj[2]
 
     # compute word probabilities
-    logit_lstm = get_layer('ff')[1](tparams,
-                                    proj_h,
-                                    options,
-                                    prefix='ff_logit_lstm',
-                                    activ=None)
-    logit_prev = get_layer('ff')[1](tparams,
-                                    emb,
-                                    options,
-                                    prefix='ff_logit_prev',
-                                    activ=None)
-    logit_ctx = get_layer('ff')[1](tparams,
-                                   ctxs,
-                                   options,
-                                   prefix='ff_logit_ctx',
-                                   activ=None)
-    logit = tensor.tanh(logit_lstm + logit_prev + logit_ctx)
+    # hidden at t to word at t
+    word_logit_lstm = get_layer('ff')[1](tparams,
+                                         proj_h,
+                                         options,
+                                         prefix='ff_word_logit_lstm',
+                                         activ=None)
+    # word at t-1 to word at t
+    word_logit_prev_w = get_layer('ff')[1](tparams,
+                                           wemb_trg,
+                                           options,
+                                           prefix='ff_word_logit_prev_w',
+                                           activ=None)
+    # characters at t-1 to word at t
+    word_logit_prev_c = get_layer('ff')[1](tparams,
+                                           cproj_comb_trg,
+                                           options,
+                                           prefix='ff_word_logit_prev_c',
+                                           activ=None)
+    # context at t to word at t
+    word_logit_ctx = get_layer('ff')[1](tparams,
+                                        ctxs,
+                                        options,
+                                        prefix='ff_word_logit_ctx',
+                                        activ=None)
+    preact = word_logit_lstm + word_logit_prev_w + \
+        word_logit_prev_c + word_logit_ctx
+
+    word_logit = tensor.tanh(preact)
     if options['use_dropout']:
-        logit = dropout_layer(logit, use_noise, trng)
-    logit = get_layer('ff')[1](tparams,
-                               logit,
-                               options,
-                               prefix='ff_logit',
-                               activ=None)
-    logit_shp = logit.shape
-    probs = tensor.nnet.softmax(logit.reshape([logit_shp[0] * logit_shp[1],
-                                               logit_shp[2]]))
+        word_logit = dropout_layer(word_logit, use_noise, trng)
+    word_logit = get_layer('ff')[1](tparams,
+                                    word_logit,
+                                    options,
+                                    prefix='ff_word_logit',
+                                    activ=None)
+    word_logit_shp = word_logit.shape
+    word_probs = tensor.nnet.softmax(word_logit.reshape(
+        [
+            word_logit_shp[0] * word_logit_shp[1],
+            word_logit_shp[2]
+        ]
+    ))
 
-    # cost
+    # compute character probabilities
+
+    # initial character decoder state
+    init_char_state = get_layer('ff')[1](tparams,
+                                         proj_h,
+                                         options,
+                                         prefix='ff_char_state',
+                                         activ=tensor.tanh)
+
+    char_dec_emb = tparams['Cemb_dec'][yc.flatten()]
+    char_dec_emb = char_dec_emb.reshape(
+        [
+            n_chars_trg,
+            n_words_trg,
+            n_samples,
+            options['dim_char_trg']
+        ]
+    )
+
+    # shift character indices over the axis of character
+    char_dec_emb_shifted = tensor.zeros_like(char_dec_emb)
+    char_dec_emb_shifted = tensor.set_subtensor(char_dec_emb_shifted[1:],
+                                                char_dec_emb[:-1])
+    char_dec_emb = char_dec_emb_shifted
+
+    proj_char_h = get_layer('gru')[1](tparams,
+                                      char_dec_emb,
+                                      options,
+                                      prefix='char_decoder',
+                                      mask=yc_mask,
+                                      init_state=init_char_state)
+    # proj_char_h: (# chars x # words x # samples x char hid dim)
+    proj_char_h = proj_char_h[0]
+
+    wemb_trg = tparams['Wemb_dec'][y.flatten()]
+    wemb_trg = wemb_trg.reshape([n_words_trg, n_samples,
+                                options['dim_word_trg']])
+
+    # from hidden of character at i of word at t to character t,i
+    # char_logit_lstm: (# chars x # words x # samples x trg char dim)
+    char_logit_lstm = get_layer('ff')[1](tparams,
+                                         proj_char_h,
+                                         options,
+                                         prefix='ff_char_logit_lstm',
+                                         activ=None)
+    # from character t,(i-1) to character t,i
+    # char_logit_prev: (# chars x # words x # samples x trg char dim)
+    char_logit_prev = get_layer('ff')[1](tparams,
+                                         char_dec_emb,
+                                         options,
+                                         prefix='ff_char_logit_prev_c',
+                                         activ=None)
+    # from character embedding t-1 to character t,i
+    # char_logit_prev_cemb: (# words x # samples x trg char dim)
+    char_logit_prev_cemb = get_layer('ff')[1](tparams,
+                                              cproj_comb_trg,
+                                              options,
+                                              prefix='ff_char_logit_prev_cemb',
+                                              activ=None)
+    # from word at t to chracter t,i
+    # char_logit_cur_w: (# words x # samples x trg char dim)
+    char_logit_cur_w = get_layer('ff')[1](tparams,
+                                          wemb_trg,
+                                          options,
+                                          prefix='ff_char_logit_cur_w',
+                                          activ=None)
+    preact = char_logit_lstm + char_logit_prev + \
+        char_logit_prev_cemb + char_logit_cur_w
+
+    char_logit = tensor.tanh(preact)
+    if options['use_dropout']:
+        char_logit = dropout_layer(char_logit, use_noise, trng)
+    char_logit = get_layer('ff')[1](tparams,
+                                    char_logit,
+                                    options,
+                                    prefix='ff_char_logit',
+                                    activ=None)
+    char_logit_shp = char_logit.shape
+    char_probs = tensor.nnet.softmax(char_logit.reshape(
+        [
+            char_logit_shp[0] * char_logit_shp[1] * char_logit_shp[2],
+            char_logit_shp[3]
+        ]
+    ))
+
+    # compute cost for words
     y_flat = y.flatten()
-    y_flat_idx = tensor.arange(y_flat.shape[0]) * options['n_words'] + y_flat
-    cost = -tensor.log(probs.flatten()[y_flat_idx])
-    cost = cost.reshape([y.shape[0], y.shape[1]])
-    cost = (cost * y_mask).sum(0)
+    y_flat_idx = tensor.arange(y_flat.shape[0]) * options['n_words_trg'] + \
+        y_flat
 
-    return trng, use_noise, x, x_mask, y, y_mask, opt_ret, cost
+    word_cost = -tensor.log(word_probs.flatten()[y_flat_idx])
+    word_cost = word_cost.reshape([y.shape[0], y.shape[1]])
+    word_cost = (word_cost * y_mask).sum(0)
+
+    # compute character cost
+    yc_flat = yc.flatten()
+    yc_shp = yc.shape
+    yc_flat_idx = tensor.arange(yc_flat.shape[0]) * options['n_chars_trg'] + \
+        yc_flat
+    char_cost = -tensor.log(char_probs.flatten()[yc_flat_idx])
+    char_cost = char_cost.reshape([yc_shp[0], yc_shp[1], yc_shp[2]])
+    """
+    # taking average of losses over characters in a word
+    char_cost = (char_cost * yc_mask).sum(0)/yc_mask.sum(0)
+    # avoid NaNs
+    char_cost = tensor.switch(yc_mask.sum(0) > 0,
+                              char_cost, 0)
+    """
+    # otherwise sum them up
+    char_cost = (char_cost * yc_mask).sum(0)
+    # summing losses over all words in a sentence
+    char_cost = char_cost.sum(0)
+
+    return trng, use_noise, xc, xc_mask, x, x_mask, \
+        yc, yc_mask, y, y_mask, opt_ret, word_cost, char_cost
 
 
 # build a sampler
 def build_sampler(tparams, options, trng):
+    xc = tensor.tensor3('xc', dtype='int64')
+    xc_mask = tensor.tensor3('xc_mask', dtype='float32')
     x = tensor.matrix('x', dtype='int64')
+    x_mask = tensor.matrix('x_mask', dtype='float32')
     xr = x[::-1]
-    n_timesteps = x.shape[0]
+    xr_mask = x_mask[::-1]
+    xcr = xc[::-1]
+    xcr_mask = xc_mask[::-1]
+
+    n_chars_src = xc.shape[0]
+    n_words_src = x.shape[0]
     n_samples = x.shape[1]
 
+    # extract character embeddings
+    cemb_src = tparams['Cemb'][xc.flatten()]
+    cemb_src = cemb_src.reshape(
+        [
+            n_chars_src,
+            n_words_src,
+            n_samples,
+            options['dim_char_src']
+        ]
+    )
+
+    # compute hidden states of character embeddings
+    cproj_src = get_layer(options['encoder'])[1](tparams,
+                                                 cemb_src,
+                                                 options,
+                                                 prefix='char_enc_src',
+                                                 mask=xc_mask)
+
+    cembr_src = tparams['Cemb'][xcr.flatten()]
+    cembr_src = cembr_src.reshape(
+        [
+            n_chars_src,
+            n_words_src,
+            n_samples,
+            options['dim_char_src']
+        ]
+    )
+    cprojr_src = get_layer(options['encoder'])[1](tparams,
+                                                  cembr_src,
+                                                  options,
+                                                  prefix='char_enc_src_r',
+                                                  mask=xcr_mask)
+
+    cproj_comb_src = concatenate([cproj_src[0][-1], cprojr_src[0][-1]],
+                                 axis=cproj_src[0].ndim-2)
+    # word representations from characters in a reverse order
+    cprojr_comb_src = cproj_comb_src[::-1]
+
+    cproj_comb_src = get_layer('ff')[1](tparams, cproj_comb_src, options,
+                                        prefix='char2word_src', activ=None)
+    cprojr_comb_src = get_layer('ff')[1](tparams, cprojr_comb_src, options,
+                                         prefix='char2word_src_r', activ=None)
+
     # word embedding (source), forward and backward
-    emb = tparams['Wemb'][x.flatten()]
-    emb = emb.reshape([n_timesteps, n_samples, options['dim_word_src']])
-    embr = tparams['Wemb'][xr.flatten()]
-    embr = embr.reshape([n_timesteps, n_samples, options['dim_word_src']])
+    wemb_src = tparams['Wemb'][x.flatten()]
+    wemb_src = wemb_src.reshape([n_words_src, n_samples,
+                                options['dim_word_src']])
+
+    word_gate_src = get_layer('ff')[1](tparams, wemb_src, options,
+                                       prefix='word_gate_src',
+                                       activ=tensor.nnet.sigmoid)
+    src_inp = word_gate_src * wemb_src + (1 - word_gate_src) * cproj_comb_src
+
+    # word embedding for backward rnn (source)
+    wembr_src = tparams['Wemb'][xr.flatten()]
+    wembr_src = wembr_src.reshape([n_words_src, n_samples,
+                                  options['dim_word_src']])
+
+    word_gate_src_r = get_layer('ff')[1](tparams, wembr_src, options,
+                                         prefix='word_gate_src_r',
+                                         activ=tensor.nnet.sigmoid)
+
+    # hidden states for new word embeddings for the backward rnn
+    src_inpr = word_gate_src_r * wembr_src + \
+        (1 - word_gate_src_r) * cprojr_comb_src
 
     # encoder
-    proj = get_layer(options['encoder'])[1](tparams,
-                                            emb,
-                                            options,
-                                            prefix='encoder')
-    projr = get_layer(options['encoder'])[1](tparams,
-                                             embr,
-                                             options,
-                                             prefix='encoder_r')
+    src_proj = get_layer(options['encoder'])[1](tparams,
+                                                src_inp,
+                                                options,
+                                                prefix='word_encoder',
+                                                mask=x_mask)
+    src_projr = get_layer(options['encoder'])[1](tparams,
+                                                 src_inpr,
+                                                 options,
+                                                 prefix='word_encoder_r',
+                                                 mask=xr_mask)
 
     # concatenate forward and backward rnn hidden states
-    ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim - 1)
+    ctx = concatenate([src_proj[0], src_projr[0][::-1]],
+                      axis=src_proj[0].ndim - 1)
 
     # get the input for decoder rnn initializer mlp
     # ctx_mean = ctx.mean(0)
-    ctx_mean = concatenate([proj[0][-1], projr[0][-1]], axis=proj[0].ndim-2)
-    init_state = get_layer('ff')[1](tparams,
-                                    ctx_mean,
-                                    options,
-                                    prefix='ff_state',
-                                    activ=tensor.tanh)
+    ctx_mean = concatenate([src_proj[0][-1], src_projr[0][-1]],
+                           axis=src_proj[0].ndim-2)
+
+    init_word_state = get_layer('ff')[1](tparams,
+                                         ctx_mean,
+                                         options,
+                                         prefix='ff_word_state',
+                                         activ=tensor.tanh)
 
     LOGGER.info('Building f_init')
-    outs = [init_state, ctx]
-    f_init = theano.function([x], outs, name='f_init', profile=False)
+    outs = [init_word_state, ctx]
+    f_init = theano.function([xc, xc_mask, x, x_mask], outs,
+                             name='f_init', profile=False)
 
-    # x: 1 x 1
+    # y: 1 x 1
     y = tensor.vector('y_sampler', dtype='int64')
-    init_state = tensor.matrix('init_state', dtype='float32')
+    init_word_state = tensor.matrix('init_word_state', dtype='float32')
+    yc = tensor.matrix('yc_sampler', dtype='int64')
+    yc_mask = tensor.matrix('yc_mask_sampler', dtype='float32')
+
+    ycr = yc[::-1]
+    ycr_mask = yc_mask[::-1]
+
+    cemb_trg = tparams['Cemb_dec'][yc.flatten()]
+    cemb_trg = cemb_trg.reshape([yc.shape[0], yc.shape[1],
+                                 options['dim_char_trg']])
+
+    cembr_trg = tparams['Cemb_dec'][ycr.flatten()]
+    cembr_trg = cembr_trg.reshape([ycr.shape[0], ycr.shape[1],
+                                   options['dim_char_trg']])
+
+    # hidden states of forward character seuqences
+    cproj_trg = get_layer(options['encoder'])[1](tparams,
+                                                 cemb_trg,
+                                                 options,
+                                                 prefix='char_enc_trg',
+                                                 mask=yc_mask)
+    # hidden states of backward character sequences
+    cprojr_trg = get_layer(options['encoder'])[1](tparams,
+                                                  cembr_trg,
+                                                  options,
+                                                  prefix='char_enc_trg_r',
+                                                  mask=ycr_mask)
+
+    # combination of the last states of forward and backward RNNs
+    # this corresponds to word representation
+    cproj_comb_trg = concatenate([cproj_trg[0][-1], cprojr_trg[0][-1]],
+                                 axis=cproj_trg[0].ndim-2)
+
+    assert cproj_comb_trg.ndim == 2
+
+    cproj_comb_trg = get_layer('ff')[1](tparams, cproj_comb_trg, options,
+                                        prefix='char2word_trg', activ=None)
+
+    wemb_trg = tparams['Wemb_dec'][y]
+
+    word_gate_trg = get_layer('ff')[1](tparams, wemb_trg, options,
+                                       prefix='word_gate_trg',
+                                       activ=tensor.nnet.sigmoid)
+
+    trg_inp = word_gate_trg * wemb_trg + (1 - word_gate_trg) * cproj_comb_trg
 
     # if it's the first word, emb should be all zero and it is indicated by -1
-    emb = tensor.switch(y[:, None] < 0,
-                        tensor.alloc(0., 1, tparams['Wemb_dec'].shape[1]),
-                        tparams['Wemb_dec'][y])
+    trg_inp = trg_inp * (y[:, None] >= 0)
+    cproj_comb_trg = cproj_comb_trg * (y[:, None] >= 0)
+    wemb_trg = wemb_trg * (y[:, None] >= 0)
 
     # apply one step of conditional gru with attention
-    proj = get_layer(options['decoder'])[1](tparams,
-                                            emb,
-                                            options,
-                                            prefix='decoder',
-                                            mask=None,
-                                            context=ctx,
-                                            one_step=True,
-                                            init_state=init_state)
+    trg_proj = get_layer(options['decoder'])[1](tparams,
+                                                trg_inp,
+                                                options,
+                                                prefix='word_decoder',
+                                                mask=None,
+                                                context=ctx,
+                                                context_mask=x_mask,
+                                                one_step=True,
+                                                init_state=init_word_state)
     # get the next hidden state
-    next_state = proj[0]
+    next_word_state = trg_proj[0]
 
     # get the weighted averages of context for this target word y
-    ctxs = proj[1]
+    ctxs = trg_proj[1]
 
-    dec_alphas = proj[2]
+    dec_alphas = trg_proj[2]
 
-    logit_lstm = get_layer('ff')[1](tparams,
-                                    next_state,
+    word_logit_lstm = get_layer('ff')[1](tparams,
+                                         next_word_state,
+                                         options,
+                                         prefix='ff_word_logit_lstm',
+                                         activ=None)
+    word_logit_prev_w = get_layer('ff')[1](tparams,
+                                           wemb_trg,
+                                           options,
+                                           prefix='ff_word_logit_prev_w',
+                                           activ=None)
+    # characters at t-1 to word at t
+    word_logit_prev_c = get_layer('ff')[1](tparams,
+                                           cproj_comb_trg,
+                                           options,
+                                           prefix='ff_word_logit_prev_c',
+                                           activ=None)
+    word_logit_ctx = get_layer('ff')[1](tparams,
+                                        ctxs,
+                                        options,
+                                        prefix='ff_word_logit_ctx',
+                                        activ=None)
+    word_logit = tensor.tanh(word_logit_lstm +
+                             word_logit_prev_w +
+                             word_logit_prev_c +
+                             word_logit_ctx)
+    word_logit = get_layer('ff')[1](tparams,
+                                    word_logit,
                                     options,
-                                    prefix='ff_logit_lstm',
+                                    prefix='ff_word_logit',
                                     activ=None)
-    logit_prev = get_layer('ff')[1](tparams,
-                                    emb,
-                                    options,
-                                    prefix='ff_logit_prev',
-                                    activ=None)
-    logit_ctx = get_layer('ff')[1](tparams,
-                                   ctxs,
-                                   options,
-                                   prefix='ff_logit_ctx',
-                                   activ=None)
-    logit = tensor.tanh(logit_lstm + logit_prev + logit_ctx)
-    logit = get_layer('ff')[1](tparams,
-                               logit,
-                               options,
-                               prefix='ff_logit',
-                               activ=None)
 
     # compute the softmax probability
-    next_probs = tensor.nnet.softmax(logit)
+    next_word_probs = tensor.nnet.softmax(word_logit)
 
     # sample from softmax distribution to get the sample
-    next_sample = trng.multinomial(pvals=next_probs).argmax(1)
+    next_word_sample = trng.multinomial(pvals=next_word_probs).argmax(1)
+
+    next_char_state = get_layer('ff')[1](tparams,
+                                         next_word_state,
+                                         options,
+                                         prefix='ff_char_state',
+                                         activ=tensor.tanh)
 
     # compile a function to do the whole thing above, next word probability,
     # sampled word for the next target, next hidden state to be used
-    LOGGER.info('Building f_next')
-    inps = [y, ctx, init_state]
-    outs = [next_probs, next_sample, next_state, dec_alphas]
-    f_next = theano.function(inps, outs, name='f_next', profile=False)
+    LOGGER.info('Building f_word_next')
+    inps = [x_mask, y, yc, yc_mask, ctx, init_word_state]
+    outs = [next_word_probs, next_word_sample, next_word_state,
+            dec_alphas, next_char_state, cproj_comb_trg]
+    f_word_next = theano.function(inps, outs,
+                                  name='f_word_next', profile=False)
 
-    return f_init, f_next
+    # NOTE character generator
+    # yc: 1 x # characters
+    y = tensor.vector('y_sampler', dtype='int64')
+    yc = tensor.vector('yc_sampler', dtype='int64')
+    # init_char_state: # characters x char hid dim
+    init_char_state = tensor.matrix('init_char_state', dtype='float32')
+
+    wemb_trg = tparams['Wemb_dec'][y]
+
+    # char_emb: # chracters x char dim
+    char_emb = tensor.switch(yc[:, None] < 0,
+                             tensor.alloc(0., 1, tparams['Cemb_dec'].shape[1]),
+                             tparams['Cemb_dec'][yc])
+
+    # char_emb: 1 x # characters x char dim
+    char_emb = char_emb[None, :, :]
+    # apply one step of conditional gru with attention
+    char_proj = get_layer(options['encoder'])[1](tparams,
+                                                 char_emb,
+                                                 options,
+                                                 prefix='char_decoder',
+                                                 mask=None,
+                                                 one_step=True,
+                                                 init_state=init_char_state)
+    # get the next hidden state
+    # next_char_state: # characters x char hid dim
+    next_char_state = char_proj[0][0]
+    # char_emb = # characters x char dim
+    char_emb = char_emb[0]
+
+    # char_logit_lstm: # characters x dim_char_trg
+    char_logit_lstm = get_layer('ff')[1](tparams,
+                                         next_char_state,
+                                         options,
+                                         prefix='ff_char_logit_lstm',
+                                         activ=None)
+    # char_logit_lstm: # characters x dim_char_trg
+    char_logit_prev = get_layer('ff')[1](tparams,
+                                         char_emb,
+                                         options,
+                                         prefix='ff_char_logit_prev_c',
+                                         activ=None)
+    char_logit_prev_cemb = get_layer('ff')[1](tparams,
+                                              cproj_comb_trg,
+                                              options,
+                                              prefix='ff_char_logit_prev_cemb',
+                                              activ=None)
+    char_logit_cur_w = get_layer('ff')[1](tparams,
+                                          wemb_trg,
+                                          options,
+                                          prefix='ff_char_logit_cur_w',
+                                          activ=None)
+    preact = char_logit_lstm + char_logit_prev + \
+        char_logit_prev_cemb + char_logit_cur_w
+
+    char_logit = tensor.tanh(preact)
+
+    char_logit = get_layer('ff')[1](tparams,
+                                    char_logit,
+                                    options,
+                                    prefix='ff_char_logit',
+                                    activ=None)
+
+    # compute the softmax probability
+    next_char_probs = tensor.nnet.softmax(char_logit)
+
+    # sample from softmax distribution to get the sample
+    next_char_sample = trng.multinomial(pvals=next_char_probs).argmax(1)
+
+    # compile a function to do the whole thing above, next char probability,
+    # sampled char for the next target, next hidden state to be used
+    LOGGER.info('Building f_char_next')
+    inps = [y, yc, init_char_state, cproj_comb_trg]
+    outs = [next_char_probs, next_char_sample, next_char_state]
+    f_char_next = theano.function(inps, outs, name='f_char_next',
+                                  profile=False)
+
+    return f_init, f_word_next, f_char_next
 
 
 # generate sample, either with stochastic sampling or beam search. Note that,
 # this function iteratively calls f_init and f_next functions.
 def gen_sample(tparams,
                f_init,
-               f_next,
+               f_word_next,
+               f_char_next,
+               xc,
+               xc_mask,
                x,
+               x_mask,
                options,
                trng=None,
                k=1,
@@ -320,120 +1033,183 @@ def gen_sample(tparams,
                argmax=False):
 
     # k is the beam size we have
-    if k > 1:
-        assert not stochastic, \
-            'Beam search does not support stochastic sampling'
+    assert k >= 1
 
-    sample = []
-    sample_score = []
-    sample_alignment = []
-    if stochastic:
-        sample_score = 0
+    word_live_k = 1
 
-    live_k = 1
-    dead_k = 0
+    word_solutions = OrderedDict([
+        ('num_samples', 0),
+        ('samples', []),
+        ('character_samples', []),
+        ('scores', []),
+        ('alignments', []),
+    ])
 
-    hyp_samples = [[]] * live_k
-    hyp_scores = numpy.zeros(live_k).astype('float32')
-    hyp_states = []
-    hyp_alignment = [[]] * live_k
+    word_hypotheses = OrderedDict([
+        ('num_samples', word_live_k),
+        ('samples', [[]] * word_live_k),
+        ('character_samples', [[]] * word_live_k),
+        ('scores', numpy.zeros(word_live_k).astype('float32')),
+        ('alignments', [[]] * word_live_k),
+        ('char_states', []),
+        ('cproj', []),
+    ])
+
+    def _check_stop_condition(solutions, hypotheses, k):
+        return solutions['num_samples'] >= k or hypotheses['num_samples'] < 1
 
     # get initial state of decoder rnn and encoder context
-    ret = f_init(x)
-    next_state, ctx0 = ret[0], ret[1]
+    # ctx0 is 3d tensor of hidden states for the input sentence
+    # next_state is a summary of hidden states for the input setence
+    # ctx0: (# src words x # sentence (i.e., 1) x # hid dim)
+    # next_state: (# sentences (i.e., 1) x # hid dim of the target setence)
+    next_word_state, ctx0 = f_init(xc, xc_mask, x, x_mask)
     next_w = -1 * numpy.ones((1, )).astype('int64')  # bos indicator
 
-    for ii in xrange(maxlen):
-        ctx = numpy.tile(ctx0, [live_k, 1])
-        inps = [next_w, ctx, next_state]
-        ret = f_next(*inps)
-        next_p, next_w, next_state, next_alphas = ret
+    next_chars = -1 * numpy.ones((1, word_live_k)).astype('int64')
+    next_chars_mask = numpy.zeros_like(next_chars).astype('float32')
 
-        if stochastic:
-            if argmax:
-                nw = next_p[0].argmax()
-            else:
-                nw = next_w[0]
-            sample.append(nw)
-            sample_score += next_p[0, nw]
-            if nw == 0:
-                break
-        else:
-            # NLL: the lower, the better
-            cand_scores = hyp_scores[:, None] - numpy.log(next_p)
-            cand_flat = cand_scores.flatten()
-            # select (k - dead_k) best words
-            # argsort's default order: ascending
-            ranks_flat = cand_flat.argsort()[:(k - dead_k)]
-            costs = cand_flat[ranks_flat]
+    sent_maxlen = maxlen
+    word_maxlen = 30
 
-            voc_size = next_p.shape[1]
-            # translation candidate indices
-            trans_indices = ranks_flat / voc_size
-            word_indices = ranks_flat % voc_size
+    for ii in xrange(sent_maxlen):
+        word_live_k = word_hypotheses['num_samples']
 
-            new_hyp_samples = []
-            new_hyp_scores = numpy.zeros(k - dead_k).astype('float32')
-            new_hyp_alignment = []
-            new_hyp_states = []
+        # NOTE `hyp_samples` is initailized by a list with a single empty list
+        # repeat the contexts the number of hypotheses
+        # (corresponding to the number of setences)
+        # (# src words x 1 x hid dim) -> (# src words x # next_hyp x hid dim)
+        ctx = numpy.tile(ctx0, [1, word_live_k, 1])
+        x_mask_ = numpy.tile(x_mask, [1, word_live_k])
 
-            for idx, [ti, wi] in enumerate(zip(trans_indices, word_indices)):
-                new_hyp_samples.append(hyp_samples[ti] + [wi])
-                new_hyp_scores[idx] = copy.copy(costs[idx])
-                """
-                assert abs(numpy.sum(next_alphas[ti]) - 1.0) < 1e-6, \
-                    '%f' % numpy.sum(next_alphas[ti])
-                """
+        # inputs to sample word candidates
+        inps = [x_mask_, next_w, next_chars, next_chars_mask,
+                ctx, next_word_state]
 
-                new_hyp_alignment.append(
-                    hyp_alignment[ti] +
-                    [copy.copy(next_alphas[ti])]
-                )
-                new_hyp_states.append(copy.copy(next_state[ti]))
+        # generate a word for the given last hidden states
+        # and previously generated words
+        next_p, _, next_word_state, next_alphas, \
+            next_char_state, cproj_comb_trg \
+            = f_word_next(*inps)
 
-            # check the finished samples
-            new_live_k = 0
-            hyp_samples = []
-            hyp_alignment = []
-            hyp_scores = []
-            hyp_states = []
+        # perform beam search to generate most probable word sequence
+        # with limited budget.
+        word_solutions, word_hypotheses \
+            = beam_search(word_solutions, word_hypotheses,
+                          next_word_state, next_p,
+                          next_alphas, next_char_state, cproj_comb_trg,
+                          k)
 
-            for idx in xrange(len(new_hyp_samples)):
-                if new_hyp_samples[idx][-1] == 0:
-                    # if the last word is the EOS token
-                    sample.append(new_hyp_samples[idx])
-                    sample_score.append(new_hyp_scores[idx])
-                    sample_alignment.append(new_hyp_alignment[idx])
-                    dead_k += 1
-                else:
-                    new_live_k += 1
-                    hyp_samples.append(new_hyp_samples[idx])
-                    hyp_scores.append(new_hyp_scores[idx])
-                    hyp_alignment.append(new_hyp_alignment[idx])
-                    hyp_states.append(new_hyp_states[idx])
+        if _check_stop_condition(word_solutions, word_hypotheses, k):
+            break
 
-            assert new_live_k + dead_k == k
+        # get the last single word for each hypothesis
+        next_w = numpy.array([w[-1] for w in word_hypotheses['samples']])
 
-            hyp_scores = numpy.array(hyp_scores)
-            live_k = new_live_k
+        next_word_state = numpy.array(word_hypotheses['states'])
+        cproj_comb_trg = numpy.array(word_hypotheses['cproj'])
+        init_char_state = numpy.array(word_hypotheses['char_state'])
 
-            if new_live_k < 1:
-                break
-            if dead_k >= k:
-                break
+        word_live_k = word_hypotheses['num_samples']
+        next_chars = [None] * word_live_k
 
-            next_w = numpy.array([w[-1] for w in hyp_samples])
-            next_state = numpy.array(hyp_states)
+        # perform nested beam search for character sequences of the next words
+        for k_idx in xrange(word_live_k):
+            char_live_k = 1
 
-    if not stochastic:
-        # dump every remaining one
-        if live_k > 0:
-            for idx in xrange(live_k):
-                sample.append(hyp_samples[idx])
-                sample_score.append(hyp_scores[idx])
-                sample_alignment.append(hyp_alignment[idx])
+            char_solutions = OrderedDict([
+                ('num_samples', 0),
+                ('samples', []),
+                ('scores', []),
+            ])
 
-    return sample, sample_alignment, sample_score
+            char_hypotheses = OrderedDict([
+                ('num_samples', char_live_k),
+                ('samples', [[]] * char_live_k),
+                ('scores', numpy.zeros(char_live_k).astype('float32')),
+                ('states', []),
+            ])
+            next_w_k = next_w[k_idx]
+            next_c = -1 * numpy.ones((1, )).astype('int64')  # bos indicator
+            # hidden state of the rnn decoder for characters
+            next_char_state = numpy.tile(init_char_state[k_idx][None, :],
+                                         [char_live_k, 1])
+            cproj_comb_trg_k = cproj_comb_trg[k_idx][None, :]
+
+            for jj in xrange(word_maxlen):
+                char_live_k = char_hypotheses['num_samples']
+                cproj_comb_trg_ = numpy.tile(cproj_comb_trg_k,
+                                             [char_live_k, 1])
+                next_w_ = numpy.tile(next_w_k, char_live_k)
+
+                inps = [next_w_, next_c, next_char_state, cproj_comb_trg_]
+                next_pc, next_c, next_char_state = f_char_next(*inps)
+
+                # perform beam search to generate most probable char sequence
+                # with limited budget.
+                char_solutions, char_hypotheses \
+                    = beam_search(char_solutions, char_hypotheses,
+                                  next_char_state, next_pc,
+                                  None, None, None,
+                                  k, level='char')
+
+                if _check_stop_condition(char_solutions, char_hypotheses, k):
+                    break
+
+                # get the last single character for each hypothesis
+                # we keep track of a word of generated characters so far
+                next_c = numpy.array(
+                    [c[-1] for c in char_hypotheses['samples']])
+                next_char_state = numpy.array(char_hypotheses['states'])
+
+            # dump remaining hypotheses
+            if char_hypotheses['num_samples'] > 0:
+                for idx in xrange(char_hypotheses['num_samples']):
+                    char_solutions['samples'].append(
+                        char_hypotheses['samples'][idx])
+                    char_solutions['scores'].append(
+                        char_hypotheses['scores'][idx])
+
+            # NOTE select the most probable character sequence
+            # for the current word sequences (beam)
+            char_sample_scores = char_solutions['scores'] /\
+                numpy.array([len(s) for s in char_solutions['samples']])
+            cc = char_solutions['samples'][char_sample_scores[1:].argmin()+1]
+            next_chars[k_idx] = cc
+
+        # NOTE adding chosen character seuqneces into word hypotheses
+        assert len(next_chars) == word_hypotheses['num_samples']
+        for idx, char_seq in enumerate(next_chars):
+            word_hypotheses['character_samples'][idx].append(char_seq)
+
+        # NOTE character sequences into matrix
+        max_char_len = numpy.max([len(char_seq) for char_seq in next_chars])
+        new_next_chars = numpy.zeros(
+            (max_char_len, word_live_k)).astype('int64')
+        next_chars_mask = numpy.zeros(
+            (max_char_len, word_live_k)).astype('float32')
+
+        for word_hyp_idx, char_seq in enumerate(next_chars):
+            new_next_chars[:len(char_seq), word_hyp_idx] = \
+                numpy.array(char_seq)
+            next_chars_mask[:len(char_seq), word_hyp_idx] = 1.
+
+        next_chars = new_next_chars
+
+    # dump every remaining one
+    if word_hypotheses['num_samples'] > 0:
+        for idx in xrange(word_hypotheses['num_samples']):
+            word_solutions['samples'].append(
+                word_hypotheses['samples'][idx])
+            word_solutions['scores'].append(
+                word_hypotheses['scores'][idx])
+            word_solutions['alignments'].append(
+                word_hypotheses['alignments'][idx])
+            word_solutions['character_samples'].append(
+                word_hypotheses['character_samples'][idx])
+
+    return word_solutions['samples'], word_solutions['alignments'], \
+        word_solutions['scores'], word_solutions['character_samples']
 
 
 # calculate the log probablities on a given corpus using translation model
@@ -442,12 +1218,15 @@ def pred_probs(f_log_probs, options, stream):
 
     n_done = 0
 
-    for x, x_mask, y, y_mask in stream.get_epoch_iterator():
+    for xc, x, x_mask, yc, y, y_mask in stream.get_epoch_iterator():
         n_done += len(x)
 
         x, x_mask, y, y_mask = x.T, x_mask.T, y.T, y_mask.T
 
-        pprobs = f_log_probs(x, x_mask, y, y_mask)
+        xc, xc_mask = prepare_character_tensor(xc)
+        yc, yc_mask = prepare_character_tensor(yc)
+
+        pprobs = f_log_probs(xc, xc_mask, x, x_mask, yc, yc_mask, y, y_mask)
         for pp in pprobs:
             probs.append(pp)
 

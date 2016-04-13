@@ -4,9 +4,11 @@ import theano
 from theano import tensor
 import warnings
 import six
+from six.moves import xrange
 import pickle
 import sys
 import itertools
+import copy
 
 import numpy
 import inspect
@@ -294,3 +296,127 @@ def prepare_character_tensor(cx):
                        sent_idx] = 1.
 
     return chars, chars_mask
+
+
+def beam_search(solutions, hypotheses,
+                next_state, next_p,
+                next_alphas=None,
+                next_char_state=None,
+                cproj=None,
+                k=1, level='word'):
+    """Performs beam search.
+
+    Parameters:
+    ----------
+        solutions : dict
+            See
+        hypotheses : dict
+            See
+        next_state : ndarray
+            See
+        next_p : ndarray
+            See
+        next_alphas : ndarray
+            See
+        cproj : ndarray
+            See
+        k : int
+
+    Returns:
+    -------
+        solutions : dict
+
+        hypotheses : dict
+    """
+
+    if level == 'char':
+        assert next_alphas is None
+        assert next_char_state is None
+        assert cproj is None
+
+    # NLL: the lower, the better
+    cand_scores = hypotheses['scores'][:, None] - numpy.log(next_p)
+    cand_flat = cand_scores.flatten()
+    # select (k - dead_k) best words or characters
+    # argsort's default order: ascending
+    ranks_flat = cand_flat.argsort()[:(k - solutions['num_samples'])]
+    costs = cand_flat[ranks_flat]
+
+    voc_size = next_p.shape[1]
+    # translation candidate indices
+    trans_indices = (ranks_flat / voc_size).astype('int64')
+    word_indices = ranks_flat % voc_size
+
+    new_hyp_samples = []
+    new_hyp_scores = numpy.zeros(
+        k - solutions['num_samples']).astype('float32')
+    new_hyp_states = []
+
+    if level == 'word':
+        new_hyp_alignment = []
+        new_hyp_char_samples = []
+        new_hyp_char_state = []
+        new_hyp_cproj = []
+
+    for idx, [ti, wi] in enumerate(zip(trans_indices, word_indices)):
+        new_hyp_samples.append(hypotheses['samples'][ti] + [wi])
+        new_hyp_scores[idx] = copy.copy(costs[idx])
+        new_hyp_states.append(copy.copy(next_state[ti]))
+
+        if level == 'word':
+            new_hyp_alignment.append(
+                hypotheses['alignments'][ti] +
+                [copy.copy(next_alphas[ti])]
+            )
+            # NOTE just copy of character sequences generated previously
+            new_hyp_char_samples.append(
+                copy.copy(hypotheses['character_samples'][ti]))
+            new_hyp_char_state.append(copy.copy(next_char_state[ti]))
+            new_hyp_cproj.append(copy.copy(cproj[ti]))
+
+    # check the finished samples
+    updated_hypotheses = OrderedDict([
+        ('num_samples', 0),
+        ('samples', []),
+        ('scores', []),
+        ('states', []),
+    ])
+
+    if level == 'word':
+        updated_hypotheses['alignments'] = []
+        updated_hypotheses['character_samples'] = []
+        updated_hypotheses['char_state'] = []
+        updated_hypotheses['cproj'] = []
+
+    for idx in xrange(len(new_hyp_samples)):
+        if new_hyp_samples[idx][-1] == 0:
+            # if the last word is the EOS token
+            solutions['num_samples'] += 1
+
+            solutions['samples'].append(new_hyp_samples[idx])
+            solutions['scores'].append(new_hyp_scores[idx])
+
+            if level == 'word':
+                solutions['alignments'].append(new_hyp_alignment[idx])
+                solutions['character_samples'].append(
+                    new_hyp_char_samples[idx])
+        else:
+            updated_hypotheses['num_samples'] += 1
+
+            updated_hypotheses['samples'].append(new_hyp_samples[idx])
+            updated_hypotheses['scores'].append(new_hyp_scores[idx])
+            updated_hypotheses['states'].append(new_hyp_states[idx])
+
+            if level == 'word':
+                updated_hypotheses['alignments'].append(new_hyp_alignment[idx])
+                updated_hypotheses['character_samples'].append(
+                    new_hyp_char_samples[idx])
+                updated_hypotheses['char_state'].append(
+                    new_hyp_char_state[idx])
+                updated_hypotheses['cproj'].append(new_hyp_cproj[idx])
+
+    assert updated_hypotheses['num_samples'] + solutions['num_samples'] == k
+
+    updated_hypotheses['scores'] = numpy.array(updated_hypotheses['scores'])
+
+    return solutions, updated_hypotheses

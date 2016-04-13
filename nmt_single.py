@@ -9,8 +9,8 @@ import sys
 import time
 import signal
 import Queue
-import subprocess
 import numpy
+from collections import OrderedDict
 
 import six
 import theano
@@ -21,129 +21,14 @@ from toolz.dicttoolz import merge
 
 from data_iterator import UNK_TOKEN, load_data
 from nmt_base import (pred_probs, build_model, save_params,
-                      build_sampler, init_params, gen_sample)
+                      build_sampler, init_params, gen_sample,
+                      prepare_validation_timer)
 from utils import (load_params, init_tparams, zipp,
-                   unzip, itemlist, RepeatedTimer)
+                   unzip, itemlist, prepare_character_tensor)
 import optimizers
 
 logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger(__name__)
-
-
-def validation(tparams, process_queue, translator_cmd, evaluator_cmd,
-               model_filename, trans_valid_src):
-
-    # We need to make sure that the model remains unchanged during evaluation
-    model = unzip(tparams)
-    save_params(model, model_filename)
-
-    # Translation runs on CPUs with BLAS
-    env_THEANO_FLAGS = 'device=cpu,floatX=%s,optimizer=%s' % (
-        theano.config.floatX,
-        theano.config.optimizer)
-
-    env = dict(os.environ, **{'OMP_NUM_THREADS': '1',
-                              'THEANO_FLAGS': env_THEANO_FLAGS})
-
-    trans_proc = subprocess.Popen(translator_cmd, env=env,
-                                  stdout=subprocess.PIPE,
-                                  stderr=subprocess.PIPE)
-
-    # put the process into the queue for signal handling
-    process_queue.put(trans_proc)
-
-    output_msg, error_msg = trans_proc.communicate()
-
-    process_queue.get()
-
-    if trans_proc.returncode == 1:
-        raise RuntimeError("%s\nFailed to translate sentences" % error_msg)
-
-    try:
-        with io.open(trans_valid_src, 'r') as trans_result_f:
-            eval_proc = subprocess.Popen(evaluator_cmd,
-                                         stdin=trans_result_f,
-                                         stdout=subprocess.PIPE,
-                                         stderr=subprocess.PIPE)
-
-            process_queue.put(eval_proc)
-
-            # sample output:
-            # BLEU = 100.00, 100.0/100.0/100.0/100.0
-            # extra part of the output is ignored.
-
-            out_msg, err_msg = eval_proc.communicate()
-
-            process_queue.get()
-
-            if eval_proc.returncode == 1:
-
-                os.remove(trans_valid_src)
-
-                raise RuntimeError("%s\nFailed to evaluate translation" %
-                                   error_msg)
-
-            overall_bleu_score = float(out_msg.split(',')[0].split('=')[1])
-            bleu_n = [float(score) for score in out_msg.split()[3].split('/')]
-            bleu_1, bleu_2, bleu_3, bleu_4 = bleu_n
-
-            evaluation_score = (overall_bleu_score,
-                                bleu_1, bleu_2, bleu_3, bleu_4)
-
-            os.remove(trans_valid_src)
-
-    except IOError:
-        LOGGER.error('Translation cannot be found, so that BLEU set to 0')
-        evaluation_score = (0., 0., 0., 0., 0.)
-
-    return (model, evaluation_score)
-
-
-def prepare_validation_timer(tparams,
-                             process_queue,
-                             model_filename,
-                             model_option_filename,
-                             eval_intv,
-                             valid_ret_queue,
-                             translator,
-                             evaluator,
-                             nproc,
-                             beam_size,
-                             src_vocab,
-                             trg_vocab,
-                             valid_src,
-                             valid_trg,
-                             trans_valid_src):
-
-    translator_cmd = [
-        "python",
-        translator,
-        "-p", str(nproc),
-        "-k", str(beam_size),
-        "-n",
-        "-u",
-        model_filename,
-        model_option_filename,
-        src_vocab,
-        trg_vocab,
-        valid_src,
-        trans_valid_src,
-    ]
-
-    evaluator_cmd = [
-        "perl",
-        evaluator,
-        valid_trg,
-    ]
-
-    args = (tparams, process_queue)
-    kwargs = {'translator_cmd': translator_cmd,
-              'evaluator_cmd': evaluator_cmd,
-              'model_filename': model_filename,
-              'trans_valid_src': trans_valid_src}
-
-    return RepeatedTimer(eval_intv*60, validation, valid_ret_queue,
-                         *args, **kwargs)
 
 
 def train(experiment_id, model_options, data_options, validation_options,
@@ -179,18 +64,26 @@ def train(experiment_id, model_options, data_options, validation_options,
 
     # use_noise is for dropout
     trng, use_noise, \
-        x, x_mask, y, y_mask, \
+        xc, xc_mask, x, x_mask, \
+        yc, yc_mask, y, y_mask, \
         opt_ret, \
-        cost = \
+        word_cost, char_cost = \
         build_model(tparams, model_options)
-    inps = [x, x_mask, y, y_mask]
+
+    inps = [xc, xc_mask, x, x_mask, yc, yc_mask, y, y_mask]
 
     LOGGER.info('Building sampler')
-    f_init, f_next = build_sampler(tparams, model_options, trng)
+    # f_init, f_word_next = build_sampler(tparams, model_options, trng)
+    f_init, \
+        f_word_next, \
+        f_char_next = build_sampler(tparams, model_options, trng)
 
     # before any regularizer
     LOGGER.info('Building f_log_probs')
-    f_log_probs = theano.function(inps, cost, profile=False)
+    f_log_word_probs = theano.function(inps, word_cost, profile=False)
+    f_log_char_probs = theano.function(inps, char_cost, profile=False)
+
+    cost = (word_cost + char_cost)
 
     cost = cost.mean()
 
@@ -244,11 +137,12 @@ def train(experiment_id, model_options, data_options, validation_options,
     valid_ret_queue = Queue.Queue()
     process_queue = Queue.Queue()
 
-    rt = prepare_validation_timer(tparams, process_queue, model_filename,
-                                  model_option_filename,
-                                  eval_intv, valid_ret_queue,
-                                  **validation_options)
-    rt.start()
+    if eval_intv > 0:
+        rt = prepare_validation_timer(tparams, process_queue, model_filename,
+                                      model_option_filename,
+                                      eval_intv, valid_ret_queue,
+                                      **validation_options)
+        rt.start()
 
     def _timer_signal_handler(signum, frame):
         LOGGER.info('Received SIGINT')
@@ -283,9 +177,12 @@ def train(experiment_id, model_options, data_options, validation_options,
     for eidx in xrange(max_epochs):
         n_samples = 0
 
-        for x, x_mask, y, y_mask in train_stream.get_epoch_iterator():
+        for xc, x, x_mask, yc, y, y_mask in train_stream.get_epoch_iterator():
             n_samples += len(x)
             x, x_mask, y, y_mask = x.T, x_mask.T, y.T, y_mask.T
+
+            xc, xc_mask = prepare_character_tensor(xc)
+            yc, yc_mask = prepare_character_tensor(yc)
 
             use_noise.set_value(1.)
 
@@ -294,7 +191,10 @@ def train(experiment_id, model_options, data_options, validation_options,
 
             # compute cost, grads and copy grads to shared variables
             update_start = time.clock()
-            cost = f_grad_shared(x, x_mask, y, y_mask)
+            cost = f_grad_shared(xc, xc_mask,
+                                 x, x_mask,
+                                 yc, yc_mask,
+                                 y, y_mask)
             f_update(lrate)
 
             log_entry['cost'] = float(cost)
@@ -322,62 +222,138 @@ def train(experiment_id, model_options, data_options, validation_options,
                 save_params(params, model_filename, saveto_filename)
 
             # generate some samples with the model and display them
-            if numpy.mod(uidx, sample_freq) == 0:
+            if sample_freq > 0 and numpy.mod(uidx, sample_freq) == 0:
                 # FIXME: random selection?
                 log_entry['samples'] = []
                 for jj in xrange(numpy.minimum(5, x.shape[1])):
-                    log_entry['samples'].append({'source': '', 'truth': '',
-                                                 'sample': ''})
-                    stochastic = True
-                    sample, _, score = gen_sample(tparams,
-                                                  f_init,
-                                                  f_next,
-                                                  x[:, jj][:, None],
-                                                  model_options,
-                                                  trng=trng,
-                                                  k=1,
-                                                  maxlen=30,
-                                                  stochastic=stochastic,
-                                                  argmax=False)
+                    log_entry['samples'].append(
+                        OrderedDict([('source', ''),
+                                     ('source (char)', ''),
+                                     ('truth', ''),
+                                     ('truth (char)', ''),
+                                     ('sample', ''),
+                                     ('align_sample', ''),
+                                     ('sample (char)', '')]))
+                    xc_ = xc[:, :, jj][:, :, None]
+                    xc_mask_ = xc_mask[:, :, jj][:, :, None]
+                    x_ = x[:, jj][:, None]
+                    x_mask_ = x_mask[:, jj][:, None]
+                    word_sample, word_alignment, \
+                        word_score, word_characters = \
+                        gen_sample(tparams,
+                                   f_init, f_word_next, f_char_next,
+                                   xc_, xc_mask_, x_, x_mask_,
+                                   model_options,
+                                   trng=trng,
+                                   k=12,
+                                   maxlen=100,
+                                   argmax=False)
+
+                    assert len(word_sample) == len(word_characters), \
+                        '%d:%d' % (len(word_sample), len(word_characters))
+
                     for vv in x[:, jj]:
                         if vv == 0:
                             break
-                        if vv in worddicts_r[0]:
-                            token = worddicts_r[0][vv]
+                        if vv in worddicts_r[1]:
+                            token = worddicts_r[1][vv]
                         else:
                             token = UNK_TOKEN
                         log_entry['samples'][-1]['source'] += token + ' '
+                    num_chars, num_words, num_samples = xc.shape
+                    for widx in xrange(num_words):
+                        if xc_mask[:, widx, jj].sum() == 0:
+                            break
+                        for cidx in xrange(num_chars):
+                            cc = xc[cidx, widx, jj]
+                            if cc == 0:
+                                break
+                            if cc in worddicts_r[0]:
+                                token = worddicts_r[0][cc]
+                            else:
+                                token = UNK_TOKEN
+                            log_entry['samples'][-1]['source (char)'] += token
+                        log_entry['samples'][-1]['source (char)'] += ' '
                     for vv in y[:, jj]:
                         if vv == 0:
                             break
-                        if vv in worddicts_r[1]:
-                            token = worddicts_r[1][vv]
+                        if vv in worddicts_r[3]:
+                            token = worddicts_r[3][vv]
                         else:
                             token = UNK_TOKEN
                         log_entry['samples'][-1]['truth'] += token + ' '
-                    if stochastic:
-                        ss = sample
-                    else:
-                        score = score / numpy.array([len(s) for s in sample])
-                        ss = sample[score.argmin()]
-                    for vv in ss:
+                    num_chars, num_words, num_samples = yc.shape
+                    for widx in xrange(num_words):
+                        if yc_mask[:, widx, jj].sum() == 0:
+                            break
+                        for cidx in xrange(num_chars):
+                            cc = yc[cidx, widx, jj]
+                            if cc == 0:
+                                break
+                            if cc in worddicts_r[2]:
+                                token = worddicts_r[2][cc]
+                            else:
+                                token = UNK_TOKEN
+                            log_entry['samples'][-1]['truth (char)'] += token
+                        log_entry['samples'][-1]['truth (char)'] += ' '
+
+                    word_score = word_score / numpy.array(
+                        [len(s) for s in word_sample])
+                    ss = word_sample[word_score.argmin()]
+                    word_alignment = word_alignment[word_score.argmin()]
+                    word_characters = word_characters[word_score.argmin()]
+
+                    for tidx, vv in enumerate(ss):
                         if vv == 0:
                             break
-                        if vv in worddicts_r[1]:
-                            token = worddicts_r[1][vv]
+                        if vv in worddicts_r[3]:
+                            token = worddicts_r[3][vv]
                         else:
                             token = UNK_TOKEN
+
+                        assert tidx >= 0 and tidx < len(word_alignment), \
+                            '%d\t%d' % (tidx, len(word_alignment))
+
+                        num_src_words = x_mask[:, jj].sum()-1
+                        align_src_word_idx = \
+                            (word_alignment[tidx][:num_src_words]).argmax()
+                        if token == UNK_TOKEN:
+                            aligned_token = '%s_<%d>' % \
+                                (worddicts_r[1][x[align_src_word_idx, jj]],
+                                 align_src_word_idx)
+                        else:
+                            aligned_token = '%s_<%d>' % \
+                                (token, align_src_word_idx)
+
                         log_entry['samples'][-1]['sample'] += token + ' '
+                        log_entry['samples'][-1]['align_sample'] \
+                            += aligned_token + ' '
+                    for word in word_characters:
+                        token = ''
+                        for character in word:
+                            if character == 0:
+                                break
+                            if character in worddicts_r[2]:
+                                token += worddicts_r[2][character]
+                            else:
+                                token += UNK_TOKEN
+
+                        log_entry['samples'][-1]['sample (char)'] \
+                            += token + ' '
 
             # validate model on validation set and early stop if necessary
             if numpy.mod(uidx, valid_freq) == 0:
                 use_noise.set_value(0.)
-                valid_errs = pred_probs(f_log_probs,
-                                        model_options, valid_stream)
-                valid_err = valid_errs.mean()
-                log_entry['validation_cost'] = float(valid_err)
+                valid_word_errs = pred_probs(f_log_word_probs,
+                                             model_options, valid_stream)
+                valid_char_errs = pred_probs(f_log_char_probs,
+                                             model_options, valid_stream)
+                valid_word_err = valid_word_errs.mean()
+                valid_char_err = valid_char_errs.mean()
+                log_entry['validation_word_cost'] = float(valid_word_err)
+                log_entry['validation_char_cost'] = float(valid_char_err)
 
-                if not numpy.isfinite(valid_err):
+                if not numpy.isfinite(valid_word_err):
                     raise RuntimeError('NaN detected in validation error')
 
             # collect validation scores (e.g., BLEU) from the child thread
@@ -418,8 +394,8 @@ def train(experiment_id, model_options, data_options, validation_options,
 
     use_noise.set_value(0.)
     LOGGER.info('Calculating validation cost')
-    valid_err = pred_probs(f_log_probs, model_options,
-                           valid_stream).mean()
+    valid_word_err = pred_probs(f_log_word_probs, model_options,
+                                valid_stream).mean()
 
     if not best_p:
         best_p = unzip(tparams)
@@ -429,7 +405,7 @@ def train(experiment_id, model_options, data_options, validation_options,
 
     rt.stop()
 
-    return valid_err
+    return valid_word_err
 
 if __name__ == "__main__":
     # Load the configuration file
