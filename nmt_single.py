@@ -63,27 +63,26 @@ def train(experiment_id, model_options, data_options, validation_options,
     tparams = init_tparams(params)
 
     # use_noise is for dropout
-    trng, use_noise, \
-        xc, xc_mask, x, x_mask, \
-        yc, yc_mask, y, y_mask, \
-        opt_ret, \
-        word_cost, char_cost = \
-        build_model(tparams, model_options)
+    trng, use_noise, encoder_vars, decoder_vars, \
+        opt_ret, costs = build_model(tparams, model_options)
 
-    inps = [xc, xc_mask, x, x_mask, yc, yc_mask, y, y_mask]
+    inps = encoder_vars + decoder_vars
 
     LOGGER.info('Building sampler')
-    # f_init, f_word_next = build_sampler(tparams, model_options, trng)
-    f_init, \
-        f_word_next, \
-        f_char_next = build_sampler(tparams, model_options, trng)
+    f_enc_init, f_sample_nexts = build_sampler(tparams, model_options, trng)
 
     # before any regularizer
-    LOGGER.info('Building f_log_probs')
-    f_log_word_probs = theano.function(inps, word_cost, profile=False)
-    f_log_char_probs = theano.function(inps, char_cost, profile=False)
+    LOGGER.info('Building functions to compute log prob')
+    f_log_probs = [
+        theano.function(inps, cost_, name='f_log_probs_%s' % cost_.name)
+        for cost_ in costs
+    ]
 
-    cost = (word_cost + char_cost)
+    assert len(costs) >= 1
+
+    cost = costs[0]
+    for cost_ in costs[1:]:
+        cost += cost_
 
     cost = cost.mean()
 
@@ -98,6 +97,9 @@ def train(experiment_id, model_options, data_options, validation_options,
 
     # regularize the alpha weights
     if alpha_c > 0. and not model_options['decoder'].endswith('simple'):
+        x_mask = encoder_vars[1]
+        y_mask = decoder_vars[1]
+
         alpha_c = theano.shared(numpy.float32(alpha_c), name='alpha_c')
         alpha_reg = alpha_c * ((tensor.cast(
             y_mask.sum(0) // x_mask.sum(0), 'float32')[:, None] -
@@ -181,8 +183,16 @@ def train(experiment_id, model_options, data_options, validation_options,
             n_samples += len(x)
             x, x_mask, y, y_mask = x.T, x_mask.T, y.T, y_mask.T
 
-            xc, xc_mask = prepare_character_tensor(xc)
-            yc, yc_mask = prepare_character_tensor(yc)
+            encoder_inps = [x, x_mask]
+            decoder_inps = [y, y_mask]
+            if model_options['use_character']:
+                xc, xc_mask = prepare_character_tensor(xc)
+                yc, yc_mask = prepare_character_tensor(yc)
+
+                encoder_inps += [xc, xc_mask]
+                decoder_inps += [yc, yc_mask]
+
+            inps = encoder_inps + decoder_inps
 
             use_noise.set_value(1.)
 
@@ -191,10 +201,7 @@ def train(experiment_id, model_options, data_options, validation_options,
 
             # compute cost, grads and copy grads to shared variables
             update_start = time.clock()
-            cost = f_grad_shared(xc, xc_mask,
-                                 x, x_mask,
-                                 yc, yc_mask,
-                                 y, y_mask)
+            cost = f_grad_shared(*inps)
             f_update(lrate)
 
             log_entry['cost'] = float(cost)
@@ -226,31 +233,38 @@ def train(experiment_id, model_options, data_options, validation_options,
                 # FIXME: random selection?
                 log_entry['samples'] = []
                 for jj in xrange(numpy.minimum(5, x.shape[1])):
-                    log_entry['samples'].append(
-                        OrderedDict([('source', ''),
-                                     ('source (char)', ''),
-                                     ('truth', ''),
-                                     ('truth (char)', ''),
-                                     ('sample', ''),
-                                     ('align_sample', ''),
-                                     ('sample (char)', '')]))
-                    xc_ = xc[:, :, jj][:, :, None]
-                    xc_mask_ = xc_mask[:, :, jj][:, :, None]
-                    x_ = x[:, jj][:, None]
-                    x_mask_ = x_mask[:, jj][:, None]
-                    word_sample, word_alignment, \
-                        word_score, word_characters = \
-                        gen_sample(tparams,
-                                   f_init, f_word_next, f_char_next,
-                                   xc_, xc_mask_, x_, x_mask_,
-                                   model_options,
-                                   trng=trng,
-                                   k=12,
-                                   maxlen=100,
-                                   argmax=False)
+                    stats = [('source', ''), ('truth', ''), ('sample', ''),
+                             ('align_sample', '')]
+                    if model_options['use_character']:
+                        stats += [('source (char)', ''), ('truth (char)', ''),
+                                  ('sample (char)', '')]
+                    log_entry['samples'].append(OrderedDict(stats))
 
-                    assert len(word_sample) == len(word_characters), \
-                        '%d:%d' % (len(word_sample), len(word_characters))
+                    sample_encoder_inps = [x[:, jj][:, None],
+                                           x_mask[:, jj][:, None]]
+                    if model_options['use_character']:
+                        sample_encoder_inps += [
+                            xc[:, :, jj][:, :, None],
+                            xc_mask[:, :, jj][:, :, None]
+                        ]
+
+                    word_solutions = gen_sample(tparams,
+                                                f_enc_init, f_sample_nexts,
+                                                sample_encoder_inps,
+                                                model_options,
+                                                trng=trng,
+                                                k=12,
+                                                maxlen=100,
+                                                argmax=False)
+
+                    word_sample = word_solutions['samples']
+                    word_alignment = word_solutions['alignments']
+                    word_score = word_solutions['scores']
+
+                    word_score = word_score / numpy.array(
+                        [len(s) for s in word_sample])
+                    ss = word_sample[word_score.argmin()]
+                    word_alignment = word_alignment[word_score.argmin()]
 
                     for vv in x[:, jj]:
                         if vv == 0:
@@ -260,20 +274,6 @@ def train(experiment_id, model_options, data_options, validation_options,
                         else:
                             token = UNK_TOKEN
                         log_entry['samples'][-1]['source'] += token + ' '
-                    num_chars, num_words, num_samples = xc.shape
-                    for widx in xrange(num_words):
-                        if xc_mask[:, widx, jj].sum() == 0:
-                            break
-                        for cidx in xrange(num_chars):
-                            cc = xc[cidx, widx, jj]
-                            if cc == 0:
-                                break
-                            if cc in worddicts_r[0]:
-                                token = worddicts_r[0][cc]
-                            else:
-                                token = UNK_TOKEN
-                            log_entry['samples'][-1]['source (char)'] += token
-                        log_entry['samples'][-1]['source (char)'] += ' '
                     for vv in y[:, jj]:
                         if vv == 0:
                             break
@@ -282,27 +282,6 @@ def train(experiment_id, model_options, data_options, validation_options,
                         else:
                             token = UNK_TOKEN
                         log_entry['samples'][-1]['truth'] += token + ' '
-                    num_chars, num_words, num_samples = yc.shape
-                    for widx in xrange(num_words):
-                        if yc_mask[:, widx, jj].sum() == 0:
-                            break
-                        for cidx in xrange(num_chars):
-                            cc = yc[cidx, widx, jj]
-                            if cc == 0:
-                                break
-                            if cc in worddicts_r[2]:
-                                token = worddicts_r[2][cc]
-                            else:
-                                token = UNK_TOKEN
-                            log_entry['samples'][-1]['truth (char)'] += token
-                        log_entry['samples'][-1]['truth (char)'] += ' '
-
-                    word_score = word_score / numpy.array(
-                        [len(s) for s in word_sample])
-                    ss = word_sample[word_score.argmin()]
-                    word_alignment = word_alignment[word_score.argmin()]
-                    word_characters = word_characters[word_score.argmin()]
-
                     for tidx, vv in enumerate(ss):
                         if vv == 0:
                             break
@@ -328,33 +307,77 @@ def train(experiment_id, model_options, data_options, validation_options,
                         log_entry['samples'][-1]['sample'] += token + ' '
                         log_entry['samples'][-1]['align_sample'] \
                             += aligned_token + ' '
-                    for word in word_characters:
-                        token = ''
-                        for character in word:
-                            if character == 0:
-                                break
-                            if character in worddicts_r[2]:
-                                token += worddicts_r[2][character]
-                            else:
-                                token += UNK_TOKEN
 
-                        log_entry['samples'][-1]['sample (char)'] \
-                            += token + ' '
+                    if model_options['use_character']:
+                        num_chars, num_words, num_samples = xc.shape
+                        for widx in xrange(num_words):
+                            if xc_mask[:, widx, jj].sum() == 0:
+                                break
+                            for cidx in xrange(num_chars):
+                                cc = xc[cidx, widx, jj]
+                                if cc == 0:
+                                    break
+                                if cc in worddicts_r[0]:
+                                    token = worddicts_r[0][cc]
+                                else:
+                                    token = UNK_TOKEN
+                                log_entry['samples'][-1]['source (char)'] \
+                                    += token
+                            log_entry['samples'][-1]['source (char)'] += ' '
+
+                        num_chars, num_words, num_samples = yc.shape
+                        for widx in xrange(num_words):
+                            if yc_mask[:, widx, jj].sum() == 0:
+                                break
+                            for cidx in xrange(num_chars):
+                                cc = yc[cidx, widx, jj]
+                                if cc == 0:
+                                    break
+                                if cc in worddicts_r[2]:
+                                    token = worddicts_r[2][cc]
+                                else:
+                                    token = UNK_TOKEN
+                                log_entry['samples'][-1]['truth (char)'] \
+                                    += token
+                            log_entry['samples'][-1]['truth (char)'] += ' '
+
+                        word_characters = word_solutions['character_samples']
+
+                        assert len(word_sample) == len(word_characters), \
+                            '%d:%d' % (len(word_sample), len(word_characters))
+
+                        word_characters = word_characters[word_score.argmin()]
+                        for word in word_characters:
+                            token = ''
+                            for character in word:
+                                if character == 0:
+                                    break
+                                if character in worddicts_r[2]:
+                                    token += worddicts_r[2][character]
+                                else:
+                                    token += UNK_TOKEN
+
+                            log_entry['samples'][-1]['sample (char)'] \
+                                += token + ' '
 
             # validate model on validation set and early stop if necessary
             if numpy.mod(uidx, valid_freq) == 0:
                 use_noise.set_value(0.)
-                valid_word_errs = pred_probs(f_log_word_probs,
-                                             model_options, valid_stream)
-                valid_char_errs = pred_probs(f_log_char_probs,
-                                             model_options, valid_stream)
-                valid_word_err = valid_word_errs.mean()
-                valid_char_err = valid_char_errs.mean()
-                log_entry['validation_word_cost'] = float(valid_word_err)
-                log_entry['validation_char_cost'] = float(valid_char_err)
+                valid_errs = [
+                    numpy.mean(
+                        pred_probs(f_,
+                                   model_options,
+                                   valid_stream))
+                    for f_ in f_log_probs
+                ]
 
-                if not numpy.isfinite(valid_word_err):
-                    raise RuntimeError('NaN detected in validation error')
+                for f_, err_ in zip(f_log_probs, valid_errs):
+                    log_entry['validation_%s' % f_.name] = float(err_)
+
+                for f_, err_ in zip(f_log_probs, valid_errs):
+                    if not numpy.isfinite(err_):
+                        raise RuntimeError(('NaN detected in validation error'
+                                            ' of %s') % f_.name)
 
             # collect validation scores (e.g., BLEU) from the child thread
             if not valid_ret_queue.empty():
@@ -394,8 +417,15 @@ def train(experiment_id, model_options, data_options, validation_options,
 
     use_noise.set_value(0.)
     LOGGER.info('Calculating validation cost')
-    valid_word_err = pred_probs(f_log_word_probs, model_options,
-                                valid_stream).mean()
+    valid_errs = [
+        numpy.mean(
+            pred_probs(f_,
+                       model_options,
+                       valid_stream))
+        for f_ in f_log_probs
+    ]
+
+    total_valid_err = numpy.sum(valid_errs)
 
     if not best_p:
         best_p = unzip(tparams)
@@ -405,7 +435,7 @@ def train(experiment_id, model_options, data_options, validation_options,
 
     rt.stop()
 
-    return valid_word_err
+    return total_valid_err
 
 if __name__ == "__main__":
     # Load the configuration file

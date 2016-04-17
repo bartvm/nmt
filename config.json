@@ -59,6 +59,7 @@
   "model": {
     "dim": 1000,
     "use_dropout": false,
+    "use_character": false,
     "encoder": "gru",
     "decoder": "gru_cond",
     "n_chars_src": 150,

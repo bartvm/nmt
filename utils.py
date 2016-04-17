@@ -299,40 +299,42 @@ def prepare_character_tensor(cx):
 
 
 def beam_search(solutions, hypotheses,
-                next_state, next_p,
-                next_alphas=None,
-                next_char_state=None,
-                cproj=None,
-                k=1, level='word'):
+                bs_state, k=1, decode_char=False, level='word'):
     """Performs beam search.
 
     Parameters:
     ----------
         solutions : dict
             See
+
         hypotheses : dict
             See
-        next_state : ndarray
-            See
-        next_p : ndarray
-            See
-        next_alphas : ndarray
-            See
-        cproj : ndarray
-            See
+
+        bs_state : list
+            State of beam search
+
         k : int
+            Size of beam
+
+        decode_char : boolean
+            Character generation
 
     Returns:
     -------
-        solutions : dict
+        updated_solutions : dict
 
-        hypotheses : dict
+        updated_hypotheses : dict
     """
 
-    if level == 'char':
-        assert next_alphas is None
-        assert next_char_state is None
-        assert cproj is None
+    assert len(bs_state) >= 2
+
+    next_state, next_p = bs_state[0], bs_state[1]
+
+    if level == 'word':
+        next_alphas = bs_state[2]
+
+        if decode_char:
+            next_char_state, cproj = bs_state[3], bs_state[4]
 
     # NLL: the lower, the better
     cand_scores = hypotheses['scores'][:, None] - numpy.log(next_p)
@@ -368,11 +370,12 @@ def beam_search(solutions, hypotheses,
                 hypotheses['alignments'][ti] +
                 [copy.copy(next_alphas[ti])]
             )
-            # NOTE just copy of character sequences generated previously
-            new_hyp_char_samples.append(
-                copy.copy(hypotheses['character_samples'][ti]))
-            new_hyp_char_state.append(copy.copy(next_char_state[ti]))
-            new_hyp_cproj.append(copy.copy(cproj[ti]))
+            if decode_char:
+                # NOTE just copy of character sequences generated previously
+                new_hyp_char_samples.append(
+                    copy.copy(hypotheses['character_samples'][ti]))
+                new_hyp_char_state.append(copy.copy(next_char_state[ti]))
+                new_hyp_cproj.append(copy.copy(cproj[ti]))
 
     # check the finished samples
     updated_hypotheses = OrderedDict([
@@ -384,9 +387,11 @@ def beam_search(solutions, hypotheses,
 
     if level == 'word':
         updated_hypotheses['alignments'] = []
-        updated_hypotheses['character_samples'] = []
-        updated_hypotheses['char_state'] = []
-        updated_hypotheses['cproj'] = []
+
+        if decode_char:
+            updated_hypotheses['character_samples'] = []
+            updated_hypotheses['char_state'] = []
+            updated_hypotheses['cproj'] = []
 
     for idx in xrange(len(new_hyp_samples)):
         if new_hyp_samples[idx][-1] == 0:
@@ -398,8 +403,10 @@ def beam_search(solutions, hypotheses,
 
             if level == 'word':
                 solutions['alignments'].append(new_hyp_alignment[idx])
-                solutions['character_samples'].append(
-                    new_hyp_char_samples[idx])
+
+                if decode_char:
+                    solutions['character_samples'].append(
+                        new_hyp_char_samples[idx])
         else:
             updated_hypotheses['num_samples'] += 1
 
@@ -409,11 +416,12 @@ def beam_search(solutions, hypotheses,
 
             if level == 'word':
                 updated_hypotheses['alignments'].append(new_hyp_alignment[idx])
-                updated_hypotheses['character_samples'].append(
-                    new_hyp_char_samples[idx])
-                updated_hypotheses['char_state'].append(
-                    new_hyp_char_state[idx])
-                updated_hypotheses['cproj'].append(new_hyp_cproj[idx])
+                if decode_char:
+                    updated_hypotheses['character_samples'].append(
+                        new_hyp_char_samples[idx])
+                    updated_hypotheses['char_state'].append(
+                        new_hyp_char_state[idx])
+                    updated_hypotheses['cproj'].append(new_hyp_cproj[idx])
 
     assert updated_hypotheses['num_samples'] + solutions['num_samples'] == k
 
