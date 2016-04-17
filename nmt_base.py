@@ -265,6 +265,12 @@ def init_params(options):
                                     ortho=False)
         params = get_layer('ff')[0](options,
                                     params,
+                                    prefix='ff_char_logit_word_state',
+                                    nin=options['dim'],
+                                    nout=options['dim_char_trg'],
+                                    ortho=False)
+        params = get_layer('ff')[0](options,
+                                    params,
                                     prefix='ff_char_logit',
                                     # nin=int(options['dim_char_trg']/2),
                                     nin=options['dim_char_trg'],
@@ -736,11 +742,19 @@ def build_model(tparams, options):
             prefix='ff_char_logit_word',
             activ=None
         )
+        char_logit_word_state = get_layer('ff')[1](
+            tparams,
+            proj_h,
+            options,
+            prefix='ff_char_logit_word_state',
+            activ=None
+        )
 
         char_logit = tensor.tanh(
             char_logit_lstm +
             char_logit_prev +
-            char_logit_word
+            char_logit_word +
+            char_logit_word_state
         )
 
         if options['use_dropout']:
@@ -1097,11 +1111,19 @@ def build_sampler(tparams, options, trng):
             prefix='ff_char_logit_word',
             activ=None
         )
+        char_logit_word_state = get_layer('ff')[1](
+            tparams,
+            next_word_state,
+            options,
+            prefix='ff_char_logit_word_state',
+            activ=None
+        )
 
         char_logit = tensor.tanh(
             char_logit_lstm +
             char_logit_prev +
-            char_logit_word
+            char_logit_word +
+            char_logit_word_state
         )
 
         char_logit = get_layer('ff')[1](tparams,
@@ -1118,7 +1140,7 @@ def build_sampler(tparams, options, trng):
 
         # sampled char for the next target, next hidden state to be used
         LOGGER.info('Building f_char_next')
-        inps = [y, yc, init_char_state, cproj_comb_trg]
+        inps = [y, yc, init_char_state, cproj_comb_trg, next_word_state]
         outs = [next_char_probs, next_char_sample, next_char_state]
         f_char_next = theano.function(inps, outs, name='f_char_next',
                                       profile=False)
@@ -1277,14 +1299,18 @@ def gen_sample(tparams,
                 next_char_state = numpy.tile(init_char_state[k_idx][None, :],
                                              [char_live_k, 1])
                 cproj_comb_trg_k = cproj_comb_trg[k_idx][None, :]
+                next_word_state_k = next_word_state[k_idx][None, :]
 
                 for jj in xrange(word_maxlen):
                     char_live_k = char_hypotheses['num_samples']
                     cproj_comb_trg_ = numpy.tile(cproj_comb_trg_k,
                                                  [char_live_k, 1])
+                    next_word_state_ = numpy.tile(next_word_state_k,
+                                                  [char_live_k, 1])
                     next_w_ = numpy.tile(next_w_k, char_live_k)
 
-                    inps = [next_w_, next_c, next_char_state, cproj_comb_trg_]
+                    inps = [next_w_, next_c, next_char_state,
+                            cproj_comb_trg_, next_word_state_]
                     next_pc, next_c, next_char_state = f_char_next(*inps)
 
                     # perform beam search to generate
