@@ -63,12 +63,12 @@ def _source_length(sentence_pair):
     return len(sentence_pair[3])
 
 
-def load_dict(filename, n_words=0):
+def load_dict(filename, dict_size=0):
     """Load vocab from TSV with words in last column."""
     dict_ = {EOS_TOKEN: 0, UNK_TOKEN: 1}
     with io.open(filename) as f:
-        if n_words > 0:
-            indices = range(len(dict_), n_words)
+        if dict_size > 0:
+            indices = range(len(dict_), dict_size)
         else:
             indices = count(len(dict_))
         dict_.update(zip(map(lambda x: x.rstrip('\n').split('\t')[-1], f),
@@ -120,10 +120,10 @@ def get_stream(source, target, source_char_dict, source_word_dict,
         raise ValueError("number of source and target files don't match")
 
     # Read the dictionaries
-    dicts = [load_dict(source_char_dict, n_words=n_chars_source),
-             load_dict(source_word_dict, n_words=n_words_source),
-             load_dict(target_char_dict, n_words=n_chars_target),
-             load_dict(target_word_dict, n_words=n_words_target)]
+    dicts = [load_dict(source_char_dict, dict_size=n_chars_source),
+             load_dict(source_word_dict, dict_size=n_words_source),
+             load_dict(target_char_dict, dict_size=n_chars_target),
+             load_dict(target_word_dict, dict_size=n_words_target)]
 
     # Open the two sets of files and merge them
     streams = [

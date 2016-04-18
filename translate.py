@@ -48,8 +48,9 @@ def _retrieve_jobs(rqueue, n_samples):
     return trans
 
 
-def translate_model(exit_event, queue, rqueue, pid, i2w_trg,
-                    model, options, k, normalize, unk_replace):
+def translate_model(exit_event, queue, rqueue, pid,
+                    i2w_trg, i2c_trg, model,
+                    options, k, normalize, unk_replace, use_character):
 
     from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
     trng = RandomStreams(1234)
@@ -63,7 +64,7 @@ def translate_model(exit_event, queue, rqueue, pid, i2w_trg,
     tparams = init_tparams(params)
 
     # word index
-    f_init, f_next = build_sampler(tparams, options, trng)
+    f_init, f_nexts = build_sampler(tparams, options, trng)
 
     def _seq2words(seq, word_idict_trg):
         words = []
@@ -73,40 +74,77 @@ def translate_model(exit_event, queue, rqueue, pid, i2w_trg,
             words.append(word_idict_trg[w])
         return words
 
-    def _translate(xc, xc_mask, x):
-        x = numpy.array(x).reshape([len(x), 1])
-        x_mask = numpy.ones_like(x)
+    def _charseq2words(char_seq, char_idict_trg):
+        words = []
+        for word in char_seq:
+            token = ''
+            for character in word:
+                if character == 0:
+                    break
+                if character in char_idict_trg:
+                    token += char_idict_trg[character]
+                else:
+                    token += UNK_TOKEN
 
-        assert x.shape[0] == xc.shape[1]
+            words.append(token)
+
+        return words
+
+    def _translate(x, x_mask, xc=None, xc_mask=None):
         assert x.ndim == 2
-        assert xc.ndim == 3
-        assert xc_mask.ndim == 3
+        if xc is not None and xc_mask is not None:
+            assert use_character
+            assert x.shape[0] == xc.shape[1]
+            assert xc.ndim == 3
+            assert xc_mask.ndim == 3
+
+        inps = [x, x_mask]
+        if use_character:
+            inps += [xc, xc_mask]
 
         # sample given an input sequence and obtain scores
-        samples, alignments, scores = gen_sample(tparams, f_init, f_next,
-                                                 xc,
-                                                 xc_mask,
-                                                 x,
-                                                 x_mask,
-                                                 options, trng=trng,
-                                                 k=k, maxlen=200,
-                                                 stochastic=False,
-                                                 argmax=False)
+        word_solutions = gen_sample(tparams, f_init, f_nexts,
+                                    inps,
+                                    options, trng=trng,
+                                    k=k, maxlen=200,
+                                    argmax=False)
+
+        samples = word_solutions['samples']
+        alignments = word_solutions['alignments']
+        scores = word_solutions['scores']
 
         # normalize scores according to sequence lengths
         if normalize:
             lengths = numpy.array([len(s) for s in samples])
             scores = scores / lengths
         sidx = numpy.argmin(scores)
-        return samples[sidx], alignments[sidx]
+        samples = samples[sidx]
+        alignments = alignments[sidx]
 
-    def _replace_unk(trans_words, src_words, alignment):
+        translation_outputs = [samples, alignments]
+
+        if use_character:
+            word_characters = word_solutions['character_samples']
+            word_characters = word_characters[sidx]
+
+            translation_outputs += [word_characters]
+
+        return translation_outputs
+
+    def _replace_unk(trans_words, src_words,
+                     alignment, trans_words_char):
+        if use_character:
+            assert len(trans_words) == len(trans_words_char)
+
         for idx, word in enumerate(trans_words):
             if word == UNK_TOKEN:
-                # pick a source word
-                # with which the target word is strongly aligned
-                # except for the EOS token
-                trans_words[idx] = src_words[alignment[idx][:-1].argmax()]
+                if use_character:
+                    trans_words[idx] = trans_words_char[idx]
+                else:
+                    # pick a source word
+                    # with which the target word is strongly aligned
+                    # except for the EOS token
+                    trans_words[idx] = src_words[alignment[idx][:-1].argmax()]
 
         return trans_words
 
@@ -121,18 +159,41 @@ def translate_model(exit_event, queue, rqueue, pid, i2w_trg,
         # src_words: original source sentence
         idx, xc, x, src_words = req
 
-        xc, xc_mask = prepare_character_tensor(xc)
+        x = numpy.array(x).reshape([len(x), 1])
+        x_mask = numpy.ones_like(x).astype('float32')
 
-        seq, alignment = _translate(xc, xc_mask, x)
+        inps = [x, x_mask]
+
+        if use_character:
+            xc, xc_mask = prepare_character_tensor(xc)
+            inps += [xc, xc_mask]
+
+        # seq, alignment = _translate(*inps)
+        trans_outs = _translate(*inps)
+
+        seq = trans_outs[0]
+        alignment = trans_outs[1]
 
         assert len(seq) == len(alignment)
 
-        # indices to tokens
+        if len(trans_outs) >= 3:
+            char_seq = trans_outs[2]
+
+        # indices to word tokens
         trans_words = _seq2words(seq, i2w_trg)
+        replace_inps = [trans_words, src_words, alignment]
+
+        if use_character:
+            # indices to characters (word)
+            trans_words_char = _charseq2words(char_seq, i2c_trg)
+
+            assert len(trans_words) == len(trans_words_char)
+
+            replace_inps += [trans_words_char]
 
         if unk_replace:
             # unknown word replacement
-            trans_words = _replace_unk(trans_words, src_words, alignment)
+            trans_words = _replace_unk(*replace_inps)
 
         # list of words to a single string
         trans_words = ' '.join(trans_words)
@@ -156,16 +217,17 @@ def main(model_path, option_path,
         config = json.load(f)
 
     options = config['model']
+    use_character = options['use_character']
 
     # load source dictionary and invert
-    char_dict_src = load_dict(char_vocab_src, n_words=options['n_chars_src'])
-    word_dict_src = load_dict(word_vocab_src, n_words=options['n_words_src'])
+    char_dict_src = load_dict(char_vocab_src, dict_size=options['n_chars_src'])
+    word_dict_src = load_dict(word_vocab_src, dict_size=options['n_words_src'])
     # word_idict_src = dict([(vv, kk) for kk, vv in word_dict.iteritems()])
 
     # load target dictionary and invert
-    # char_dict_trg = load_dict(char_vocab_trg, n_chars=options['n_chars_trg'])
-    # char_idict_trg = dict([(vv, kk) for kk, vv in char_dict_trg.iteritems()])
-    word_dict_trg = load_dict(word_vocab_trg, n_words=options['n_words_trg'])
+    char_dict_trg = load_dict(char_vocab_trg, dict_size=options['n_chars_trg'])
+    char_idict_trg = dict([(vv, kk) for kk, vv in char_dict_trg.iteritems()])
+    word_dict_trg = load_dict(word_vocab_trg, dict_size=options['n_words_trg'])
     word_idict_trg = dict([(vv, kk) for kk, vv in word_dict_trg.iteritems()])
 
     default_sigint_handler = signal.getsignal(signal.SIGINT)
@@ -196,7 +258,8 @@ def main(model_path, option_path,
         processes[midx] = Process(
             target=translate_model,
             args=(exit_event, queue, rqueue, midx, word_idict_trg,
-                  model_path, options, k, normalize, unk_replace))
+                  char_idict_trg, model_path, options, k, normalize,
+                  unk_replace, use_character))
 
     for proc in processes:
         proc.start()
