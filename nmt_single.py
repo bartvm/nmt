@@ -234,7 +234,8 @@ def train(experiment_id, model_options, data_options, validation_options,
                 log_entry['samples'] = []
                 for jj in xrange(numpy.minimum(5, x.shape[1])):
                     stats = [('source', ''), ('truth', ''), ('sample', ''),
-                             ('align_sample', '')]
+                             ('align_sample', ''), ('weights', ''),
+                             ('gates', '')]
                     if model_options['use_character']:
                         stats += [('source (char)', ''), ('truth (char)', ''),
                                   ('sample (char)', '')]
@@ -254,17 +255,32 @@ def train(experiment_id, model_options, data_options, validation_options,
                                                 model_options,
                                                 trng=trng,
                                                 k=12,
-                                                maxlen=100,
+                                                max_sent_len=100,
+                                                max_word_len=30,
                                                 argmax=False)
 
                     word_sample = word_solutions['samples']
                     word_alignment = word_solutions['alignments']
                     word_score = word_solutions['scores']
+                    word_gates = word_solutions['word_gates']
+                    word_weights = word_solutions['word_weights']
 
                     word_score = word_score / numpy.array(
                         [len(s) for s in word_sample])
                     ss = word_sample[word_score.argmin()]
                     word_alignment = word_alignment[word_score.argmin()]
+
+                    log_entry['samples'][-1]['gates'] = \
+                        numpy.array2string(
+                            word_gates[:, :x_mask[:, jj].sum()],
+                            precision=2, max_line_width=500,
+                            suppress_small=True)
+
+                    log_entry['samples'][-1]['weights'] = \
+                        numpy.array2string(
+                            word_weights.squeeze()[:x_mask[:, jj].sum()],
+                            precision=3, max_line_width=500,
+                            suppress_small=True)
 
                     for vv in x[:, jj]:
                         if vv == 0:

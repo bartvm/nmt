@@ -14,7 +14,7 @@ from multiprocessing import Process, Queue, Event
 
 from six.moves import xrange
 
-from data_iterator import (load_dict, EOS_TOKEN, UNK_TOKEN)
+from data_iterator import (load_dict, EOW_TOKEN, EOS_TOKEN, UNK_TOKEN)
 from nmt_base import (build_sampler, gen_sample, init_params)
 from utils import (load_params, init_tparams, prepare_character_tensor)
 
@@ -27,7 +27,7 @@ def _send_jobs(fname, queue, char_dict_src, word_dict_src,
             line = line.strip()
             words = line.split()
             words += [EOS_TOKEN]
-            line += ' '
+            line += EOW_TOKEN
             x = map(lambda w: word_dict_src[w] if w in word_dict_src else 1,
                     words)
             x = map(lambda ii: ii if ii < n_words_src else 1, x)
@@ -106,7 +106,8 @@ def translate_model(exit_event, queue, rqueue, pid,
         word_solutions = gen_sample(tparams, f_init, f_nexts,
                                     inps,
                                     options, trng=trng,
-                                    k=k, maxlen=200,
+                                    k=k, max_sent_len=200,
+                                    max_word_len=60,
                                     argmax=False)
 
         samples = word_solutions['samples']
