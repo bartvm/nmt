@@ -220,11 +220,6 @@ def init_params(options):
             nout=options['dim_word_src']
         )
         params = get_layer('ff')[0](
-            options, params, prefix='word_gate_src_r',
-            nin=options['dim_word_src'],
-            nout=options['dim_word_src']
-        )
-        params = get_layer('ff')[0](
             options, params, prefix='word_gate_trg',
             nin=options['dim_word_trg'],
             nout=options['dim_word_trg']
@@ -302,18 +297,19 @@ def init_params(options):
                                               dim=options['dim'])
     ctxdim = 2 * options['dim']
 
-    # init state weighting
-    params = get_layer('ff')[0](options,
-                                params,
-                                prefix='ff_state_proj',
-                                nin=ctxdim,
-                                nout=ctxdim)
-    params = get_layer('ff')[0](options,
-                                params,
-                                prefix='ff_context_proj',
-                                nin=ctxdim,
-                                nout=ctxdim)
-    params['word_weight_score'] = norm_weight(ctxdim, 1)
+    if options['init_decoder'] == 'adaptive':
+        # init state weighting
+        params = get_layer('ff')[0](options,
+                                    params,
+                                    prefix='ff_state_proj',
+                                    nin=ctxdim,
+                                    nout=ctxdim)
+        params = get_layer('ff')[0](options,
+                                    params,
+                                    prefix='ff_context_proj',
+                                    nin=ctxdim,
+                                    nout=ctxdim)
+        params['word_weight_score'] = norm_weight(ctxdim, 1)
 
     # init_state
     params = get_layer('ff')[0](options,
@@ -422,29 +418,33 @@ def build_model(tparams, options):
                                    options['dim_word_src']])
 
     if options['use_character']:
-        xc = tensor.tensor3('xc', dtype='int64')
-        xc_mask = tensor.tensor3('xc_mask', dtype='float32')
+        xc = tensor.matrix('xc', dtype='int64')
+        xc_mask = tensor.matrix('xc_mask', dtype='float32')
+        yc_in = tensor.matrix('yc_in', dtype='int64')
+        yc_in_mask = tensor.matrix('yc_in_mask', dtype='float32')
         yc = tensor.tensor3('yc', dtype='int64')
         yc_mask = tensor.tensor3('yc_mask', dtype='float32')
 
+        n_nz_words_src = xc.shape[1]
+        n_nz_words_trg = yc_in.shape[1]
+
         encoder_vars += [xc, xc_mask]
-        decoder_vars += [yc, yc_mask]
+        decoder_vars += [yc_in, yc_in_mask, yc, yc_mask]
 
         xcr = xc[::-1]  # reverse characters; word order is intact
         xcr_mask = xc_mask[::-1]
-        ycr = yc[::-1]
-        ycr_mask = yc_mask[::-1]
+        ycr_in = yc_in[::-1]
+        ycr_in_mask = yc_in_mask[::-1]
 
         n_chars_src = xc.shape[0]
-        n_chars_trg = yc.shape[0]
+        n_chars_trg = yc_in.shape[0]
 
         # extract character embeddings
         cemb_src = tparams['Cemb'][xc.flatten()]
         cemb_src = cemb_src.reshape(
             [
                 n_chars_src,
-                n_words_src,
-                n_samples,
+                n_nz_words_src,
                 options['dim_char_src']
             ]
         )
@@ -461,8 +461,7 @@ def build_model(tparams, options):
         cembr_src = cembr_src.reshape(
             [
                 n_chars_src,
-                n_words_src,
-                n_samples,
+                n_nz_words_src,
                 options['dim_char_src']
             ]
         )
@@ -490,12 +489,46 @@ def build_model(tparams, options):
                                            prefix='word_gate_src',
                                            activ=tensor.nnet.sigmoid)
 
+        # fill the reduced set of word embeddings into
+        # a 3D tensor of the same size with word embeddings
+        nz_word_idx = x_mask.flatten().nonzero()
+        tmp_cproj_comb_src = tensor.alloc(
+            0.,
+            n_words_src * n_samples, options['dim_word_src'])
+
+        cproj_comb_src = tensor.set_subtensor(
+            tmp_cproj_comb_src[nz_word_idx],
+            cproj_comb_src)
+        cproj_comb_src = cproj_comb_src.reshape(
+            [
+                n_words_src,
+                n_samples,
+                options['dim_word_src']
+            ]
+        )
+
         src_inp = word_gate_src * wemb_src + \
             (1 - word_gate_src) * cproj_comb_src
 
         word_gate_src_r = get_layer('ff')[1](tparams, wembr_src, options,
-                                             prefix='word_gate_src_r',
+                                             prefix='word_gate_src',
                                              activ=tensor.nnet.sigmoid)
+
+        nz_word_idx = xr_mask.flatten().nonzero()
+        tmp_cprojr_comb_src = tensor.alloc(
+            0.,
+            n_words_src * n_samples, options['dim_word_src'])
+
+        cprojr_comb_src = tensor.set_subtensor(
+            tmp_cprojr_comb_src[nz_word_idx],
+            cprojr_comb_src)
+        cprojr_comb_src = cprojr_comb_src.reshape(
+            [
+                n_words_src,
+                n_samples,
+                options['dim_word_src']
+            ]
+        )
 
         src_inpr = word_gate_src_r * wembr_src + \
             (1 - word_gate_src_r) * cprojr_comb_src
@@ -519,41 +552,41 @@ def build_model(tparams, options):
     ctx = concatenate([src_proj[0], src_projr[0][::-1]],
                       axis=src_proj[0].ndim - 1)
 
-    ctx_mean = (ctx * x_mask[:, :, None]).max(0)
+    if options['init_decoder'] == 'last':
+        ctx_mean = concatenate([src_proj[0][-1], src_projr[0][-1]],
+                               axis=src_proj[0].ndim-2)
+    elif options['init_decoder'] == 'average':
+        ctx_mean = (ctx * x_mask[:, :, None]).sum(0) / x_mask.sum(0)[:, None]
+    elif options['init_decoder'] == 'adaptive':
+        ctx_mean = (ctx * x_mask[:, :, None]).max(0)
 
-    # mean of the context (across time) will be used to initialize decoder rnn
-    # ctx_mean = (ctx * x_mask[:, :, None]).sum(0) / x_mask.sum(0)[:, None]
-    # or you can use the last state of forward + backward encoder rnns
-    # ctx_mean = concatenate([src_proj[0][-1], src_projr[0][-1]],
-    #                       axis=src_proj[0].ndim-2)
+        # NOTE compute importance of words for the given context vector
+        proj_states = get_layer('ff')[1](tparams,
+                                         ctx,
+                                         options,
+                                         prefix='ff_state_proj',
+                                         activ=None)
+        proj_mean = get_layer('ff')[1](tparams,
+                                       ctx_mean,
+                                       options,
+                                       prefix='ff_context_proj',
+                                       activ=None)
 
-    # NOTE compute importance of words for the given context vector
-    proj_states = get_layer('ff')[1](tparams,
-                                     ctx,
-                                     options,
-                                     prefix='ff_state_proj',
-                                     activ=None)
-    proj_mean = get_layer('ff')[1](tparams,
-                                   ctx_mean,
-                                   options,
-                                   prefix='ff_context_proj',
-                                   activ=None)
+        # # src words x # batches x ctxdim
+        word_weights = tensor.tanh(proj_states + proj_mean[None, :, :])
+        # # src words x # batches x 1
+        word_weights = tensor.dot(word_weights, tparams['word_weight_score'])
+        word_weights = word_weights.reshape([word_weights.shape[0],
+                                             word_weights.shape[1]])
+        # # src words x # batches
+        word_weights = tensor.exp(
+            word_weights - word_weights.max(0, keepdims=True))
+        word_weights = word_weights * x_mask
+        # # src words x # batches
+        word_weights = word_weights / word_weights.sum(0, keepdims=True)
 
-    # # src words x # batches x ctxdim
-    word_weights = tensor.tanh(proj_states + proj_mean[None, :, :])
-    # # src words x # batches x 1
-    word_weights = tensor.dot(word_weights, tparams['word_weight_score'])
-    word_weights = word_weights.reshape([word_weights.shape[0],
-                                         word_weights.shape[1]])
-    # # src words x # batches
-    word_weights = tensor.exp(
-        word_weights - word_weights.max(0, keepdims=True))
-    word_weights = word_weights * x_mask
-    # # src words x # batches
-    word_weights = word_weights / word_weights.sum(0, keepdims=True)
-
-    # update the context vector
-    ctx_mean = (ctx * word_weights[:, :, None]).sum(0)
+        # update the context vector
+        ctx_mean = (ctx * word_weights[:, :, None]).sum(0)
 
     # initial decoder state
     init_state = get_layer('ff')[1](tparams,
@@ -569,12 +602,11 @@ def build_model(tparams, options):
 
     if options['use_character']:
         # character embedding in the target language
-        cemb_trg = tparams['Cemb_dec'][yc.flatten()]
+        cemb_trg = tparams['Cemb_dec'][yc_in.flatten()]
         cemb_trg = cemb_trg.reshape(
             [
                 n_chars_trg,
-                n_words_trg,
-                n_samples,
+                n_nz_words_trg,
                 options['dim_char_trg']
             ]
         )
@@ -584,15 +616,14 @@ def build_model(tparams, options):
                                                      cemb_trg,
                                                      options,
                                                      prefix='char_enc_trg',
-                                                     mask=yc_mask)
+                                                     mask=yc_in_mask)
 
         # repeat for the reverse characters
-        cembr_trg = tparams['Cemb_dec'][ycr.flatten()]
+        cembr_trg = tparams['Cemb_dec'][ycr_in.flatten()]
         cembr_trg = cembr_trg.reshape(
             [
                 n_chars_trg,
-                n_words_trg,
-                n_samples,
+                n_nz_words_trg,
                 options['dim_char_trg']
             ]
         )
@@ -602,7 +633,7 @@ def build_model(tparams, options):
                                                       cembr_trg,
                                                       options,
                                                       prefix='char_enc_trg_r',
-                                                      mask=ycr_mask)
+                                                      mask=ycr_in_mask)
 
         # pick the last state to represent words in the forward chain of words
         cproj_comb_trg = concatenate([cproj_trg[0][-1], cprojr_trg[0][-1]],
@@ -615,6 +646,22 @@ def build_model(tparams, options):
         word_gate_trg = get_layer('ff')[1](tparams, wemb_trg, options,
                                            prefix='word_gate_trg',
                                            activ=tensor.nnet.sigmoid)
+
+        nz_word_idx = y_mask.flatten().nonzero()
+        tmp_cproj_comb_trg = tensor.alloc(
+            0.,
+            n_words_trg * n_samples, options['dim_word_trg'])
+
+        cproj_comb_trg = tensor.set_subtensor(
+            tmp_cproj_comb_trg[nz_word_idx],
+            cproj_comb_trg)
+        cproj_comb_trg = cproj_comb_trg.reshape(
+            [
+                n_words_trg,
+                n_samples,
+                options['dim_word_trg']
+            ]
+        )
 
         trg_inp = word_gate_trg * wemb_trg + \
             (1 - word_gate_trg) * cproj_comb_trg
@@ -918,7 +965,7 @@ def build_sampler(tparams, options, trng):
             (1 - word_gate_src) * cproj_comb_src
 
         word_gate_src_r = get_layer('ff')[1](tparams, wembr_src, options,
-                                             prefix='word_gate_src_r',
+                                             prefix='word_gate_src',
                                              activ=tensor.nnet.sigmoid)
 
         src_inpr = word_gate_src_r * wembr_src + \
@@ -926,8 +973,8 @@ def build_sampler(tparams, options, trng):
 
         gates = concatenate(
             [
-                (word_gate_src >= 0.5).sum(2),
-                (word_gate_src_r >= 0.5).sum(2)[::-1]
+                (word_gate_src >= 0.8).sum(2),
+                (1-word_gate_src >= 0.8).sum(2)
             ], axis=1) / word_gate_src.shape[2].astype('float32')
     else:
         src_inp = wemb_src
@@ -951,35 +998,36 @@ def build_sampler(tparams, options, trng):
     ctx = concatenate([src_proj[0], src_projr[0][::-1]],
                       axis=src_proj[0].ndim - 1)
 
-    ctx_mean = (ctx * x_mask[:, :, None]).max(0)
+    if options['init_decoder'] == 'last':
+        ctx_mean = concatenate([src_proj[0][-1], src_projr[0][-1]],
+                               axis=src_proj[0].ndim-2)
+    elif options['init_decoder'] == 'average':
+        ctx_mean = ctx.mean(0)
+    elif options['init_decoder'] == 'adaptive':
+        ctx_mean = (ctx * x_mask[:, :, None]).max(0)
 
-    # get the input for decoder rnn initializer mlp
-    # ctx_mean = ctx.mean(0)
-    # ctx_mean = concatenate([src_proj[0][-1], src_projr[0][-1]],
-    #                        axis=src_proj[0].ndim-2)
+        proj_states = get_layer('ff')[1](tparams,
+                                         ctx,
+                                         options,
+                                         prefix='ff_state_proj',
+                                         activ=None)
+        proj_mean = get_layer('ff')[1](tparams,
+                                       ctx_mean,
+                                       options,
+                                       prefix='ff_context_proj',
+                                       activ=None)
 
-    proj_states = get_layer('ff')[1](tparams,
-                                     ctx,
-                                     options,
-                                     prefix='ff_state_proj',
-                                     activ=None)
-    proj_mean = get_layer('ff')[1](tparams,
-                                   ctx_mean,
-                                   options,
-                                   prefix='ff_context_proj',
-                                   activ=None)
+        word_weights = tensor.tanh(proj_states + proj_mean[None, :, :])
+        word_weights = tensor.dot(word_weights, tparams['word_weight_score'])
+        word_weights = word_weights.reshape([word_weights.shape[0],
+                                             word_weights.shape[1]])
+        word_weights = tensor.exp(
+            word_weights - word_weights.max(0, keepdims=True))
+        word_weights = word_weights * x_mask
+        word_weights = word_weights / word_weights.sum(0, keepdims=True)
 
-    word_weights = tensor.tanh(proj_states + proj_mean[None, :, :])
-    word_weights = tensor.dot(word_weights, tparams['word_weight_score'])
-    word_weights = word_weights.reshape([word_weights.shape[0],
-                                         word_weights.shape[1]])
-    word_weights = tensor.exp(
-        word_weights - word_weights.max(0, keepdims=True))
-    word_weights = word_weights * x_mask
-    word_weights = word_weights / word_weights.sum(0, keepdims=True)
-
-    # update the context vector
-    ctx_mean = (ctx * word_weights[:, :, None]).sum(0)
+        # update the context vector
+        ctx_mean = (ctx * word_weights[:, :, None]).sum(0)
 
     init_word_state = get_layer('ff')[1](tparams,
                                          ctx_mean,
@@ -988,7 +1036,12 @@ def build_sampler(tparams, options, trng):
                                          activ=tensor.tanh)
 
     LOGGER.info('Building f_init')
-    encoder_outs = [init_word_state, ctx, word_weights, gates.T]
+    encoder_outs = [init_word_state, ctx]
+    if options['init_decoder'] == 'adaptive':
+        encoder_outs.append(word_weights)
+    if options['use_character']:
+        encoder_outs.append(gates.T)
+
     f_init = theano.function(encoder_vars, encoder_outs,
                              name='f_init', profile=False)
 
@@ -1289,12 +1342,23 @@ def gen_sample(tparams,
     # next_state is a summary of hidden states for the input setence
     # ctx0: (# src words x # sentence (i.e., 1) x # hid dim)
     # next_state: (# sentences (i.e., 1) x # hid dim of the target setence)
-    next_word_state, ctx0, word_weights, word_gates = f_init(*inps)
-    next_w = -1 * numpy.ones((1, )).astype('int64')  # bos indicator
+    encoder_outs = f_init(*inps)
+    next_word_state, ctx0 = encoder_outs[0], encoder_outs[1]
+    if len(encoder_outs) == 3:
+        assert (options['init_decoder'] == 'adaptive') ^ \
+            options['use_character']
+        if options['init_decoder'] == 'adaptive':
+            word_solutions['word_weights'] = encoder_outs[2]
+        if options['use_character']:
+            word_solutions['word_gates'] = encoder_outs[2]
+    elif len(encoder_outs) == 4:
+        assert options['init_decoder'] == 'adaptive'
+        assert options['use_character']
 
-    # XXX temporary variables for model inspection
-    word_solutions['word_weights'] = word_weights
-    word_solutions['word_gates'] = word_gates
+        word_solutions['word_weights'] = encoder_outs[2]
+        word_solutions['word_gates'] = encoder_outs[3]
+
+    next_w = -1 * numpy.ones((1, )).astype('int64')  # bos indicator
 
     if options['use_character']:
         next_chars = -1 * numpy.ones((1, word_live_k)).astype('int64')
@@ -1480,8 +1544,20 @@ def pred_probs(f_log_probs, options, stream):
             xc, xc_mask = prepare_character_tensor(xc)
             yc, yc_mask = prepare_character_tensor(yc)
 
-            encoder_inps += [xc, xc_mask]
-            decoder_inps += [yc, yc_mask]
+            xc_in = xc.reshape([xc.shape[0], -1])
+            xc_in_mask = xc_mask.reshape([xc_mask.shape[0], -1])
+
+            xc_in = xc_in[:, x_mask.flatten() > 0]
+            xc_in_mask = xc_in_mask[:, x_mask.flatten() > 0]
+
+            yc_in = yc.reshape([yc.shape[0], -1])
+            yc_in_mask = yc_mask.reshape([yc_mask.shape[0], -1])
+
+            yc_in = yc_in[:, y_mask.flatten() > 0]
+            yc_in_mask = yc_in_mask[:, y_mask.flatten() > 0]
+
+            encoder_inps += [xc_in, xc_in_mask]
+            decoder_inps += [yc_in, yc_in_mask, yc, yc_mask]
 
         inps = encoder_inps + decoder_inps
 

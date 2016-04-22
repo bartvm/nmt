@@ -74,7 +74,8 @@ def train(experiment_id, model_options, data_options, validation_options,
     # before any regularizer
     LOGGER.info('Building functions to compute log prob')
     f_log_probs = [
-        theano.function(inps, cost_, name='f_log_probs_%s' % cost_.name)
+        theano.function(inps, cost_, name='f_log_probs_%s' % cost_.name,
+                        on_unused_input='ignore')
         for cost_ in costs
     ]
 
@@ -189,8 +190,20 @@ def train(experiment_id, model_options, data_options, validation_options,
                 xc, xc_mask = prepare_character_tensor(xc)
                 yc, yc_mask = prepare_character_tensor(yc)
 
-                encoder_inps += [xc, xc_mask]
-                decoder_inps += [yc, yc_mask]
+                xc_in = xc.reshape([xc.shape[0], -1])
+                xc_in_mask = xc_mask.reshape([xc_mask.shape[0], -1])
+
+                xc_in = xc_in[:, x_mask.flatten() > 0]
+                xc_in_mask = xc_in_mask[:, x_mask.flatten() > 0]
+
+                yc_in = yc.reshape([yc.shape[0], -1])
+                yc_in_mask = yc_mask.reshape([yc_mask.shape[0], -1])
+
+                yc_in = yc_in[:, y_mask.flatten() > 0]
+                yc_in_mask = yc_in_mask[:, y_mask.flatten() > 0]
+
+                encoder_inps += [xc_in, xc_in_mask]
+                decoder_inps += [yc_in, yc_in_mask, yc, yc_mask]
 
             inps = encoder_inps + decoder_inps
 
@@ -262,25 +275,26 @@ def train(experiment_id, model_options, data_options, validation_options,
                     word_sample = word_solutions['samples']
                     word_alignment = word_solutions['alignments']
                     word_score = word_solutions['scores']
-                    word_gates = word_solutions['word_gates']
-                    word_weights = word_solutions['word_weights']
+                    if model_options['use_character']:
+                        word_gates = word_solutions['word_gates']
+                        log_entry['samples'][-1]['gates'] = \
+                            numpy.array2string(
+                                word_gates[:, :x_mask[:, jj].sum()],
+                                precision=2, max_line_width=500,
+                                suppress_small=True)
+
+                    if model_options['init_decoder'] == 'adaptive':
+                        word_weights = word_solutions['word_weights']
+                        log_entry['samples'][-1]['weights'] = \
+                            numpy.array2string(
+                                word_weights.squeeze()[:x_mask[:, jj].sum()],
+                                precision=3, max_line_width=500,
+                                suppress_small=True)
 
                     word_score = word_score / numpy.array(
                         [len(s) for s in word_sample])
                     ss = word_sample[word_score.argmin()]
                     word_alignment = word_alignment[word_score.argmin()]
-
-                    log_entry['samples'][-1]['gates'] = \
-                        numpy.array2string(
-                            word_gates[:, :x_mask[:, jj].sum()],
-                            precision=2, max_line_width=500,
-                            suppress_small=True)
-
-                    log_entry['samples'][-1]['weights'] = \
-                        numpy.array2string(
-                            word_weights.squeeze()[:x_mask[:, jj].sum()],
-                            precision=3, max_line_width=500,
-                            suppress_small=True)
 
                     for vv in x[:, jj]:
                         if vv == 0:
