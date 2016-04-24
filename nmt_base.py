@@ -491,13 +491,13 @@ def build_model(tparams, options):
 
         # fill the reduced set of word embeddings into
         # a 3D tensor of the same size with word embeddings
-        nz_word_idx = x_mask.flatten().nonzero()
+        nz_word_src_inds = x_mask.flatten().nonzero()
         tmp_cproj_comb_src = tensor.alloc(
             0.,
             n_words_src * n_samples, options['dim_word_src'])
 
         cproj_comb_src = tensor.set_subtensor(
-            tmp_cproj_comb_src[nz_word_idx],
+            tmp_cproj_comb_src[nz_word_src_inds],
             cproj_comb_src)
         cproj_comb_src = cproj_comb_src.reshape(
             [
@@ -514,13 +514,13 @@ def build_model(tparams, options):
                                              prefix='word_gate_src',
                                              activ=tensor.nnet.sigmoid)
 
-        nz_word_idx = xr_mask.flatten().nonzero()
+        nz_wordr_src_inds = xr_mask.flatten().nonzero()
         tmp_cprojr_comb_src = tensor.alloc(
             0.,
             n_words_src * n_samples, options['dim_word_src'])
 
         cprojr_comb_src = tensor.set_subtensor(
-            tmp_cprojr_comb_src[nz_word_idx],
+            tmp_cprojr_comb_src[nz_wordr_src_inds],
             cprojr_comb_src)
         cprojr_comb_src = cprojr_comb_src.reshape(
             [
@@ -647,15 +647,15 @@ def build_model(tparams, options):
                                            prefix='word_gate_trg',
                                            activ=tensor.nnet.sigmoid)
 
-        nz_word_idx = y_mask.flatten().nonzero()
-        tmp_cproj_comb_trg = tensor.alloc(
+        nz_word_trg_inds = y_mask.flatten().nonzero()
+        new_cproj_comb_trg = tensor.alloc(
             0.,
             n_words_trg * n_samples, options['dim_word_trg'])
 
-        cproj_comb_trg = tensor.set_subtensor(
-            tmp_cproj_comb_trg[nz_word_idx],
+        new_cproj_comb_trg = tensor.set_subtensor(
+            new_cproj_comb_trg[nz_word_trg_inds],
             cproj_comb_trg)
-        cproj_comb_trg = cproj_comb_trg.reshape(
+        cproj_comb_trg = new_cproj_comb_trg.reshape(
             [
                 n_words_trg,
                 n_samples,
@@ -974,7 +974,7 @@ def build_sampler(tparams, options, trng):
         gates = concatenate(
             [
                 (word_gate_src >= 0.8).sum(2),
-                (1-word_gate_src >= 0.8).sum(2)
+                (1-word_gate_src >= 0.5).sum(2)
             ], axis=1) / word_gate_src.shape[2].astype('float32')
     else:
         src_inp = wemb_src
@@ -1040,7 +1040,7 @@ def build_sampler(tparams, options, trng):
     if options['init_decoder'] == 'adaptive':
         encoder_outs.append(word_weights)
     if options['use_character']:
-        encoder_outs.append(gates.T)
+        encoder_outs.append(gates)
 
     f_init = theano.function(encoder_vars, encoder_outs,
                              name='f_init', profile=False)
@@ -1097,11 +1097,18 @@ def build_sampler(tparams, options, trng):
         trg_inp = word_gate_trg * wemb_trg + \
             (1 - word_gate_trg) * cproj_comb_trg
 
+        trg_gates = concatenate(
+            [
+                (word_gate_trg >= 0.8).sum(1, keepdims=True),
+                (1-word_gate_trg >= 0.5).sum(1, keepdims=True)
+            ], axis=1) / word_gate_trg.shape[1].astype('float32')
+
         # if the variables are for the first word,
         # they  should be all zero.
         cproj_comb_trg = cproj_comb_trg * (y[:, None] >= 0)
     else:
         trg_inp = wemb_trg
+        trg_gates = tensor.alloc(1., 1, 1)
 
     # if it's the first word, emb should be all zero and it is indicated by -1
     trg_inp = trg_inp * (y[:, None] >= 0)
@@ -1161,7 +1168,7 @@ def build_sampler(tparams, options, trng):
     LOGGER.info('Building f_word_next')
     f_wsamp_inps = [x_mask, y, ctx, init_word_state]
     f_wsamp_outs = [next_word_probs, next_word_sample, next_word_state,
-                    dec_alphas]
+                    dec_alphas, trg_gates]
 
     if options['use_character']:
         next_char_state = get_layer('ff')[1](tparams,
@@ -1313,11 +1320,13 @@ def gen_sample(tparams,
     word_live_k = 1
 
     word_solutions_ds = [('num_samples', 0), ('samples', []),
-                         ('alignments', []), ('scores', [])]
+                         ('alignments', []), ('scores', []),
+                         ('word_src_gates', []), ('word_trg_gates', [])]
 
     word_hypotheses_ds = [
         ('num_samples', word_live_k),
         ('samples', [[]] * word_live_k),
+        ('word_trg_gates', [[]] * word_live_k),
         ('alignments', [[]] * word_live_k),
         ('scores', numpy.zeros(word_live_k).astype('float32')),
     ]
@@ -1350,13 +1359,13 @@ def gen_sample(tparams,
         if options['init_decoder'] == 'adaptive':
             word_solutions['word_weights'] = encoder_outs[2]
         if options['use_character']:
-            word_solutions['word_gates'] = encoder_outs[2]
+            word_solutions['word_src_gates'] = encoder_outs[2]
     elif len(encoder_outs) == 4:
         assert options['init_decoder'] == 'adaptive'
         assert options['use_character']
 
         word_solutions['word_weights'] = encoder_outs[2]
-        word_solutions['word_gates'] = encoder_outs[3]
+        word_solutions['word_src_gates'] = encoder_outs[3]
 
     next_w = -1 * numpy.ones((1, )).astype('int64')  # bos indicator
 
@@ -1383,14 +1392,14 @@ def gen_sample(tparams,
         # and previously generated words
         wsamp_outs = f_word_next(*wsamp_inps)
 
-        next_p, next_word_state, next_alphas = \
-            wsamp_outs[0], wsamp_outs[2], wsamp_outs[3]
+        next_p, next_word_state, next_alphas, next_trg_gates = \
+            wsamp_outs[0], wsamp_outs[2], wsamp_outs[3], wsamp_outs[4]
 
         if options['use_character']:
-            next_char_state, cproj_comb_trg = wsamp_outs[4], wsamp_outs[5]
+            next_char_state, cproj_comb_trg = wsamp_outs[5], wsamp_outs[6]
 
         # preparation of inputs to beam search
-        beam_state = [next_word_state, next_p, next_alphas]
+        beam_state = [next_word_state, next_p, next_alphas, next_trg_gates]
 
         if options['use_character']:
             beam_state += [next_char_state, cproj_comb_trg]
@@ -1517,6 +1526,8 @@ def gen_sample(tparams,
                 word_hypotheses['samples'][idx])
             word_solutions['scores'].append(
                 word_hypotheses['scores'][idx])
+            word_solutions['word_trg_gates'].append(
+                word_hypotheses['word_trg_gates'][idx])
             word_solutions['alignments'].append(
                 word_hypotheses['alignments'][idx])
             if options['use_character']:

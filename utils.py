@@ -331,10 +331,10 @@ def beam_search(solutions, hypotheses,
     next_state, next_p = bs_state[0], bs_state[1]
 
     if level == 'word':
-        next_alphas = bs_state[2]
+        next_alphas, next_trg_gates = bs_state[2], bs_state[3]
 
         if decode_char:
-            next_char_state, cproj = bs_state[3], bs_state[4]
+            next_char_state, cproj = bs_state[4], bs_state[5]
 
     # NLL: the lower, the better
     cand_scores = hypotheses['scores'][:, None] - numpy.log(next_p)
@@ -355,6 +355,7 @@ def beam_search(solutions, hypotheses,
     new_hyp_states = []
 
     if level == 'word':
+        new_hyp_word_trg_gate = []
         new_hyp_alignment = []
         new_hyp_char_samples = []
         new_hyp_char_state = []
@@ -366,6 +367,10 @@ def beam_search(solutions, hypotheses,
         new_hyp_states.append(copy.copy(next_state[ti]))
 
         if level == 'word':
+            new_hyp_word_trg_gate.append(
+                hypotheses['word_trg_gates'][ti] +
+                [copy.copy(next_trg_gates[ti])]
+            )
             new_hyp_alignment.append(
                 hypotheses['alignments'][ti] +
                 [copy.copy(next_alphas[ti])]
@@ -386,6 +391,7 @@ def beam_search(solutions, hypotheses,
     ])
 
     if level == 'word':
+        updated_hypotheses['word_trg_gates'] = []
         updated_hypotheses['alignments'] = []
 
         if decode_char:
@@ -402,6 +408,7 @@ def beam_search(solutions, hypotheses,
             solutions['scores'].append(new_hyp_scores[idx])
 
             if level == 'word':
+                solutions['word_trg_gates'].append(new_hyp_word_trg_gate[idx])
                 solutions['alignments'].append(new_hyp_alignment[idx])
 
                 if decode_char:
@@ -415,6 +422,8 @@ def beam_search(solutions, hypotheses,
             updated_hypotheses['states'].append(new_hyp_states[idx])
 
             if level == 'word':
+                updated_hypotheses['word_trg_gates'].append(
+                    new_hyp_word_trg_gate[idx])
                 updated_hypotheses['alignments'].append(new_hyp_alignment[idx])
                 if decode_char:
                     updated_hypotheses['character_samples'].append(

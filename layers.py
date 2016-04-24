@@ -1,7 +1,7 @@
 import theano
 from theano import tensor
 import numpy
-from utils import uniform_weight, ortho_weight, norm_weight
+from utils import uniform_weight, ortho_weight
 
 
 def zero_vector(length):
@@ -194,20 +194,24 @@ def param_init_gru_cond(options,
     param = param_init_gru(options, param, prefix=prefix, nin=nin, dim=dim)
 
     # context to LSTM
-    param[prefix + '_Wc'] = norm_weight(dimctx, dim * 2, ortho=False)
-    param[prefix + '_Wcx'] = norm_weight(dimctx, dim, ortho=False)
+    param[prefix + '_Wc'] = numpy.concatenate(
+        [
+            uniform_weight(dimctx, dim), uniform_weight(dimctx, dim)
+        ], axis=1
+    )
+    param[prefix + '_Wcx'] = uniform_weight(dimctx, dim)
 
     # attention: combined -> hidden
-    param[prefix + '_W_comb_att'] = norm_weight(dim, dimctx, ortho=False)
+    param[prefix + '_W_comb_att'] = uniform_weight(dim, dimctx)
 
     # attention: context -> hidden
-    param[prefix + '_Wc_att'] = norm_weight(dimctx, dimctx, ortho=False)
+    param[prefix + '_Wc_att'] = uniform_weight(dimctx, dimctx)
 
     # attention: hidden bias
     param[prefix + '_b_att'] = zero_vector(dimctx)
 
     # attention:
-    param[prefix + '_U_att'] = norm_weight(dimctx, 1, ortho=False)
+    param[prefix + '_U_att'] = uniform_weight(dimctx, 1)
 
     return param
 

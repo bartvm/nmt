@@ -8,7 +8,7 @@ import shutil
 import sys
 import time
 import signal
-import Queue
+import Queue as queue
 import numpy
 from collections import OrderedDict
 
@@ -137,8 +137,8 @@ def train(experiment_id, model_options, data_options, validation_options,
     log = Logger(filename='{}.log.jsonl.gz'.format(experiment_id))
 
     # evaluation score will be stored into the following queue
-    valid_ret_queue = Queue.Queue()
-    process_queue = Queue.Queue()
+    valid_ret_queue = queue.Queue()
+    process_queue = queue.Queue()
 
     if eval_intv > 0:
         rt = prepare_validation_timer(tparams, process_queue, model_filename,
@@ -248,7 +248,7 @@ def train(experiment_id, model_options, data_options, validation_options,
                 for jj in xrange(numpy.minimum(5, x.shape[1])):
                     stats = [('source', ''), ('truth', ''), ('sample', ''),
                              ('align_sample', ''), ('weights', ''),
-                             ('gates', '')]
+                             ('word_gates_src', ''), ('word_gates_trg', '')]
                     if model_options['use_character']:
                         stats += [('source (char)', ''), ('truth (char)', ''),
                                   ('sample (char)', '')]
@@ -275,11 +275,27 @@ def train(experiment_id, model_options, data_options, validation_options,
                     word_sample = word_solutions['samples']
                     word_alignment = word_solutions['alignments']
                     word_score = word_solutions['scores']
+
+                    word_score = word_score / numpy.array(
+                        [len(s) for s in word_sample])
+                    ss = word_sample[word_score.argmin()]
+                    word_alignment = word_alignment[word_score.argmin()]
+
                     if model_options['use_character']:
-                        word_gates = word_solutions['word_gates']
-                        log_entry['samples'][-1]['gates'] = \
+                        word_src_gates = word_solutions['word_src_gates']
+                        log_entry['samples'][-1]['word_gates_src'] = \
                             numpy.array2string(
-                                word_gates[:, :x_mask[:, jj].sum()],
+                                word_src_gates[:x_mask[:, jj].sum(), :].T,
+                                precision=2, max_line_width=500,
+                                suppress_small=True)
+
+                        word_trg_gates = word_solutions['word_trg_gates']
+                        word_trg_gates = numpy.array(
+                            word_trg_gates[word_score.argmin()])
+
+                        log_entry['samples'][-1]['word_gates_trg'] = \
+                            numpy.array2string(
+                                word_trg_gates.T,
                                 precision=2, max_line_width=500,
                                 suppress_small=True)
 
@@ -290,11 +306,6 @@ def train(experiment_id, model_options, data_options, validation_options,
                                 word_weights.squeeze()[:x_mask[:, jj].sum()],
                                 precision=3, max_line_width=500,
                                 suppress_small=True)
-
-                    word_score = word_score / numpy.array(
-                        [len(s) for s in word_sample])
-                    ss = word_sample[word_score.argmin()]
-                    word_alignment = word_alignment[word_score.argmin()]
 
                     for vv in x[:, jj]:
                         if vv == 0:
