@@ -66,7 +66,7 @@ def _source_length(sentence_pair):
 def load_dict(filename, dict_size=0):
     """Load vocab from TSV with words in last column."""
     dict_ = {EOS_TOKEN: 0, UNK_TOKEN: 1}
-    with io.open(filename) as f:
+    with io.open(filename, encoding='utf8') as f:
         if dict_size > 0:
             indices = range(len(dict_), dict_size)
         else:
@@ -80,7 +80,8 @@ def get_stream(source, target, source_char_dict, source_word_dict,
                target_char_dict, target_word_dict, batch_size,
                buffer_multiplier=100, n_chars_source=0, n_words_source=0,
                n_chars_target=0, n_words_target=0,
-               max_src_length=None, max_trg_length=None):
+               max_src_word_length=None, max_trg_word_length=None,
+               max_src_char_length=None, max_trg_char_length=None):
     """Returns a stream over sentence pairs.
 
     Parameters
@@ -140,13 +141,21 @@ def get_stream(source, target, source_char_dict, source_word_dict,
                              'target_chars', 'target_words'))
 
     # Filter sentence lengths
-    if max_src_length or max_trg_length:
+    if max_src_word_length or max_trg_word_length:
         def filter_pair(pair):
             src_chars, src_words, \
                 trg_chars, trg_words = pair
-            src_ok = (not max_src_length) or len(src_words) < max_src_length
-            trg_ok = (not max_trg_length) or len(trg_words) < max_trg_length
-            return src_ok and trg_ok
+            src_word_ok = (not max_src_word_length) or \
+                len(src_words) < max_src_word_length
+            trg_word_ok = (not max_trg_word_length) or \
+                len(trg_words) < max_trg_word_length
+            src_char_ok = (not max_src_char_length) or \
+                len(src_chars) < (max_src_char_length + max_src_word_length)
+            trg_char_ok = (not max_trg_char_length) or \
+                len(trg_chars) < (max_trg_char_length + max_trg_word_length)
+
+            return src_word_ok and trg_word_ok and src_char_ok and trg_char_ok
+
         merged = Filter(merged, filter_pair)
 
     # Batches of approximately uniform size
@@ -170,7 +179,8 @@ def load_data(src, trg,
               n_chars_src, n_words_src,
               n_chars_trg, n_words_trg,
               batch_size, valid_batch_size,
-              max_src_length, max_trg_length):
+              max_src_word_length, max_trg_word_length,
+              max_src_char_length, max_trg_char_length):
     LOGGER.info('Loading data')
 
     dictionaries = [src_char_vocab, src_word_vocab,
@@ -198,8 +208,10 @@ def load_data(src, trg,
                               n_chars_target=n_chars_trg,
                               n_words_target=n_words_trg,
                               batch_size=batch_size,
-                              max_src_length=max_src_length,
-                              max_trg_length=max_trg_length)
+                              max_src_word_length=max_src_word_length,
+                              max_trg_word_length=max_trg_word_length,
+                              max_src_char_length=max_src_char_length,
+                              max_trg_char_length=max_trg_char_length)
     valid_stream = get_stream([valid_datasets[0]],
                               [valid_datasets[1]],
                               dictionaries[0],

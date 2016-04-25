@@ -149,11 +149,9 @@ def init_params(options):
 
     src_inp_dim = options['dim_word_src']
     trg_inp_dim = options['dim_word_trg']
-    trg_out_dim = options['dim_word_trg']
     if options['use_character']:
         src_inp_dim += options['char_hid']*2
         trg_inp_dim += options['char_hid']*2
-        trg_out_dim += options['char_hid']
 
     if options['use_character']:
         """
@@ -503,10 +501,11 @@ def build_model(tparams, options):
 
         # fill the reduced set of word embeddings into
         # a 3D tensor of the same size with word embeddings
+        cemb_src_dim = cproj_comb_src.shape[1]
         nz_word_src_inds = x_mask.flatten().nonzero()
         tmp_cproj_comb_src = tensor.alloc(
             0.,
-            n_words_src * n_samples, options['dim_word_src'])
+            n_words_src * n_samples, cemb_src_dim)
 
         cproj_comb_src = tensor.set_subtensor(
             tmp_cproj_comb_src[nz_word_src_inds],
@@ -515,7 +514,7 @@ def build_model(tparams, options):
             [
                 n_words_src,
                 n_samples,
-                options['dim_word_src']
+                cemb_src_dim
             ]
         )
 
@@ -535,7 +534,7 @@ def build_model(tparams, options):
         nz_wordr_src_inds = xr_mask.flatten().nonzero()
         tmp_cprojr_comb_src = tensor.alloc(
             0.,
-            n_words_src * n_samples, options['dim_word_src'])
+            n_words_src * n_samples, cemb_src_dim)
 
         cprojr_comb_src = tensor.set_subtensor(
             tmp_cprojr_comb_src[nz_wordr_src_inds],
@@ -544,7 +543,7 @@ def build_model(tparams, options):
             [
                 n_words_src,
                 n_samples,
-                options['dim_word_src']
+                cemb_src_dim
             ]
         )
 
@@ -672,10 +671,11 @@ def build_model(tparams, options):
                                            activ=tensor.nnet.sigmoid)
         '''
 
+        cemb_trg_dim = cproj_comb_trg.shape[1]
         nz_word_trg_inds = y_mask.flatten().nonzero()
         new_cproj_comb_trg = tensor.alloc(
             0.,
-            n_words_trg * n_samples, options['dim_word_trg'])
+            n_words_trg * n_samples, cemb_trg_dim)
 
         new_cproj_comb_trg = tensor.set_subtensor(
             new_cproj_comb_trg[nz_word_trg_inds],
@@ -684,7 +684,7 @@ def build_model(tparams, options):
             [
                 n_words_trg,
                 n_samples,
-                options['dim_word_trg']
+                cemb_trg_dim
             ]
         )
 
