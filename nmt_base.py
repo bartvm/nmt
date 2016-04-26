@@ -202,45 +202,14 @@ def init_params(options):
             dim=options['char_hid']
         )
 
-        '''
-        # non-linear mapping of character embeddings to word embeddings
-        params = get_layer('ff')[0](
-            options, params, prefix='char2word_src',
-            nin=options['char_hid']*2,
-            nout=options['dim_word_src']
-        )
-        params = get_layer('ff')[0](
-            options, params, prefix='char2word_src_r',
-            nin=options['char_hid']*2,
-            nout=options['dim_word_src']
-        )
-        params = get_layer('ff')[0](
-            options, params, prefix='char2word_trg',
-            nin=options['char_hid']*2,
-            nout=options['dim_word_trg']
-        )
-
-        # (soft) gate to select embeddings
-        params = get_layer('ff')[0](
-            options, params, prefix='word_gate_src',
-            nin=options['dim_word_src'],
-            nout=options['dim_word_src']
-        )
-        params = get_layer('ff')[0](
-            options, params, prefix='word_gate_trg',
-            nin=options['dim_word_trg'],
-            nout=options['dim_word_trg']
-        )
-        '''
+        # hidden states at the word-level decoder are used to initialize
+        # the character-level decoder
         params = get_layer('ff')[0](options,
                                     params,
-                                    prefix='ff_char_state',
+                                    prefix='ff_init_char_dec_proj',
                                     nin=options['dim'],
                                     nout=options['char_hid'])
-
         # decoder for target characters
-        # NOTE character decoder doesn't need alignment
-        #  when computing hidden states in the current implementation
         params = get_layer('gru')[0](
             options,
             params,
@@ -262,20 +231,7 @@ def init_params(options):
                                     ortho=False)
         params = get_layer('ff')[0](options,
                                     params,
-                                    prefix='ff_char_logit_word',
-                                    nin=src_inp_dim,
-                                    nout=options['dim_char_trg'],
-                                    ortho=False)
-        params = get_layer('ff')[0](options,
-                                    params,
-                                    prefix='ff_char_logit_word_state',
-                                    nin=options['dim'],
-                                    nout=options['dim_char_trg'],
-                                    ortho=False)
-        params = get_layer('ff')[0](options,
-                                    params,
                                     prefix='ff_char_logit',
-                                    # nin=int(options['dim_char_trg']/2),
                                     nin=options['dim_char_trg'],
                                     nout=options['n_chars_trg'])
 
@@ -484,21 +440,6 @@ def build_model(tparams, options):
         # word representations from characters in a reverse order
         cprojr_comb_src = cproj_comb_src[::-1]
 
-        '''
-        cproj_comb_src = get_layer('ff')[1](
-            tparams, cproj_comb_src, options,
-            prefix='char2word_src', activ=None
-        )
-        cprojr_comb_src = get_layer('ff')[1](
-            tparams, cprojr_comb_src, options,
-            prefix='char2word_src_r', activ=None
-        )
-
-        word_gate_src = get_layer('ff')[1](tparams, wemb_src, options,
-                                           prefix='word_gate_src',
-                                           activ=tensor.nnet.sigmoid)
-        '''
-
         # fill the reduced set of word embeddings into
         # a 3D tensor of the same size with word embeddings
         cemb_src_dim = cproj_comb_src.shape[1]
@@ -518,18 +459,7 @@ def build_model(tparams, options):
             ]
         )
 
-        '''
-        src_inp = word_gate_src * wemb_src + \
-            (1 - word_gate_src) * cproj_comb_src
-        '''
-
         src_inp = concatenate([wemb_src, cproj_comb_src], axis=wemb_src.ndim-1)
-
-        '''
-        word_gate_src_r = get_layer('ff')[1](tparams, wembr_src, options,
-                                             prefix='word_gate_src',
-                                             activ=tensor.nnet.sigmoid)
-        '''
 
         nz_wordr_src_inds = xr_mask.flatten().nonzero()
         tmp_cprojr_comb_src = tensor.alloc(
@@ -547,15 +477,10 @@ def build_model(tparams, options):
             ]
         )
 
-        '''
-        src_inpr = word_gate_src_r * wembr_src + \
-            (1 - word_gate_src_r) * cprojr_comb_src
-        '''
-
         src_inpr = concatenate([wembr_src, cprojr_comb_src],
                                axis=wembr_src.ndim-1)
     else:
-        src_inp, src_inpr = wemb_src, wemb_src
+        src_inp, src_inpr = wemb_src, wembr_src
 
     # hidden states for new word embeddings for the forward rnn
     src_proj = get_layer(options['encoder'])[1](tparams,
@@ -661,16 +586,6 @@ def build_model(tparams, options):
         cproj_comb_trg = concatenate([cproj_trg[0][-1], cprojr_trg[0][-1]],
                                      axis=cproj_trg[0].ndim-2)
 
-        '''
-        cproj_comb_trg = get_layer('ff')[1](tparams, cproj_comb_trg, options,
-                                            prefix='char2word_trg',
-                                            activ=None)
-
-        word_gate_trg = get_layer('ff')[1](tparams, wemb_trg, options,
-                                           prefix='word_gate_trg',
-                                           activ=tensor.nnet.sigmoid)
-        '''
-
         cemb_trg_dim = cproj_comb_trg.shape[1]
         nz_word_trg_inds = y_mask.flatten().nonzero()
         new_cproj_comb_trg = tensor.alloc(
@@ -688,10 +603,6 @@ def build_model(tparams, options):
             ]
         )
 
-        '''
-        trg_inp = word_gate_trg * wemb_trg + \
-            (1 - word_gate_trg) * cproj_comb_trg
-        '''
         trg_inp = concatenate([wemb_trg, cproj_comb_trg], axis=wemb_trg.ndim-1)
     else:
         trg_inp = wemb_trg
@@ -783,20 +694,18 @@ def build_model(tparams, options):
         """ Character decoder in the target side
 
         """
-        # shift precomputed word reprs from characters to the right
-        cproj_comb_trg_shifted = tensor.zeros_like(cproj_comb_trg)
-        cproj_comb_trg_shifted = tensor.set_subtensor(
-            cproj_comb_trg_shifted[1:],
-            cproj_comb_trg[:-1]
-        )
-        cproj_comb_trg = cproj_comb_trg_shifted
 
         # initial character decoder state
-        init_char_state = get_layer('ff')[1](tparams,
-                                             proj_h,
-                                             options,
-                                             prefix='ff_char_state',
-                                             activ=tensor.tanh)
+        init_char_dec_proj = get_layer('ff')[1](
+            tparams,
+            proj_h,
+            options,
+            prefix='ff_init_char_dec_proj',
+            activ=None
+        )
+        init_char_dec_state = tensor.tanh(
+            init_char_dec_proj
+        )
 
         char_dec_emb = tparams['Cemb_dec'][yc.flatten()]
         char_dec_emb = char_dec_emb.reshape(
@@ -819,22 +728,9 @@ def build_model(tparams, options):
                                           options,
                                           prefix='char_decoder',
                                           mask=yc_mask,
-                                          init_state=init_char_state)
+                                          init_state=init_char_dec_state)
         # proj_char_h: (# chars x # words x # samples x char hid dim)
         proj_char_h = proj_char_h[0]
-
-        wemb_trg = tparams['Wemb_dec'][y.flatten()]
-        wemb_trg = wemb_trg.reshape([n_words_trg, n_samples,
-                                    options['dim_word_trg']])
-
-        '''
-        word_gate_trg = get_layer('ff')[1](tparams, wemb_trg, options,
-                                           prefix='word_gate_trg',
-                                           activ=tensor.nnet.sigmoid)
-        trg_inp = word_gate_trg * wemb_trg + \
-            (1 - word_gate_trg) * cproj_comb_trg
-        '''
-        trg_inp = concatenate([wemb_trg, cproj_comb_trg], axis=wemb_trg.ndim-1)
 
         # from hidden of character at i of word at t to character t,i
         # char_logit_lstm: (# chars x # words x # samples x trg char dim)
@@ -850,30 +746,10 @@ def build_model(tparams, options):
                                              options,
                                              prefix='ff_char_logit_prev_c',
                                              activ=None)
-        # from character embedding t-1 to character t,i
-        # char_logit_prev_cemb: (# words x # samples x trg char dim)
-        # from word at t to chracter t,i
-        # char_logit_cur_w: (# words x # samples x trg char dim)
-        char_logit_word = get_layer('ff')[1](
-            tparams,
-            trg_inp,
-            options,
-            prefix='ff_char_logit_word',
-            activ=None
-        )
-        char_logit_word_state = get_layer('ff')[1](
-            tparams,
-            proj_h,
-            options,
-            prefix='ff_char_logit_word_state',
-            activ=None
-        )
 
         char_logit = tensor.tanh(
             char_logit_lstm +
-            char_logit_prev +
-            char_logit_word +
-            char_logit_word_state
+            char_logit_prev
         )
 
         if options['use_dropout']:
@@ -977,38 +853,6 @@ def build_sampler(tparams, options, trng):
                                      axis=cproj_src[0].ndim-2)
         # word representations from characters in a reverse order
         cprojr_comb_src = cproj_comb_src[::-1]
-
-        '''
-        cproj_comb_src = get_layer('ff')[1](
-            tparams, cproj_comb_src, options,
-            prefix='char2word_src', activ=None
-        )
-        cprojr_comb_src = get_layer('ff')[1](
-            tparams, cprojr_comb_src, options,
-            prefix='char2word_src_r', activ=None
-        )
-
-        word_gate_src = get_layer('ff')[1](tparams, wemb_src, options,
-                                           prefix='word_gate_src',
-                                           activ=tensor.nnet.sigmoid)
-
-        src_inp = word_gate_src * wemb_src + \
-            (1 - word_gate_src) * cproj_comb_src
-
-        word_gate_src_r = get_layer('ff')[1](tparams, wembr_src, options,
-                                             prefix='word_gate_src',
-                                             activ=tensor.nnet.sigmoid)
-
-        src_inpr = word_gate_src_r * wembr_src + \
-            (1 - word_gate_src_r) * cprojr_comb_src
-
-        gates = concatenate(
-            [
-                (word_gate_src >= 0.8).sum(2),
-                (1-word_gate_src >= 0.5).sum(2)
-            ], axis=1) / word_gate_src.shape[2].astype('float32')
-
-        '''
 
         src_inp = concatenate([wemb_src, cproj_comb_src], axis=wemb_src.ndim-1)
         src_inpr = concatenate([wembr_src, cprojr_comb_src],
@@ -1123,26 +967,6 @@ def build_sampler(tparams, options, trng):
         cproj_comb_trg = concatenate([cproj_trg[0][-1], cprojr_trg[0][-1]],
                                      axis=cproj_trg[0].ndim-2)
 
-        assert cproj_comb_trg.ndim == 2
-
-        '''
-        cproj_comb_trg = get_layer('ff')[1](tparams, cproj_comb_trg, options,
-                                            prefix='char2word_trg',
-                                            activ=None)
-
-        word_gate_trg = get_layer('ff')[1](tparams, wemb_trg, options,
-                                           prefix='word_gate_trg',
-                                           activ=tensor.nnet.sigmoid)
-
-        trg_inp = word_gate_trg * wemb_trg + \
-            (1 - word_gate_trg) * cproj_comb_trg
-
-        trg_gates = concatenate(
-            [
-                (word_gate_trg >= 0.8).sum(1, keepdims=True),
-                (1-word_gate_trg >= 0.5).sum(1, keepdims=True)
-            ], axis=1) / word_gate_trg.shape[1].astype('float32')
-        '''
         trg_inp = concatenate([wemb_trg, cproj_comb_trg], axis=wemb_trg.ndim-1)
         trg_gates = tensor.alloc(1., 1, 1)
 
@@ -1214,14 +1038,19 @@ def build_sampler(tparams, options, trng):
                     dec_alphas, trg_gates]
 
     if options['use_character']:
-        next_char_state = get_layer('ff')[1](tparams,
-                                             next_word_state,
-                                             options,
-                                             prefix='ff_char_state',
-                                             activ=tensor.tanh)
+        init_char_dec_proj = get_layer('ff')[1](
+            tparams,
+            next_word_state,
+            options,
+            prefix='ff_init_char_dec_proj',
+            activ=None
+        )
+        next_char_state = tensor.tanh(
+            init_char_dec_proj
+        )
 
         f_wsamp_inps += [yc, yc_mask]
-        f_wsamp_outs += [next_char_state, cproj_comb_trg]
+        f_wsamp_outs += [next_char_state]
 
     f_word_next = theano.function(f_wsamp_inps, f_wsamp_outs,
                                   name='f_word_next', profile=False)
@@ -1231,23 +1060,10 @@ def build_sampler(tparams, options, trng):
     if options['use_character']:
         # NOTE character generator
         # yc: 1 x # characters
-        y = tensor.vector('y_sampler', dtype='int64')
         yc = tensor.vector('yc_sampler', dtype='int64')
         # init_char_state: # characters x char hid dim
         init_char_state = tensor.matrix('init_char_state', dtype='float32')
 
-        wemb_trg = tparams['Wemb_dec'][y]
-        '''
-        word_gate_trg = get_layer('ff')[1](tparams, wemb_trg, options,
-                                           prefix='word_gate_trg',
-                                           activ=tensor.nnet.sigmoid)
-
-        trg_dec_inp = word_gate_trg * wemb_trg + \
-            (1 - word_gate_trg) * cproj_comb_trg
-        '''
-
-        trg_dec_inp = concatenate([wemb_trg, cproj_comb_trg],
-                                  axis=wemb_trg.ndim-1)
         # char_emb: # chracters x char dim
         char_emb = tensor.switch(
             yc[:, None] < 0,
@@ -1285,26 +1101,10 @@ def build_sampler(tparams, options, trng):
                                              options,
                                              prefix='ff_char_logit_prev_c',
                                              activ=None)
-        char_logit_word = get_layer('ff')[1](
-            tparams,
-            trg_dec_inp,
-            options,
-            prefix='ff_char_logit_word',
-            activ=None
-        )
-        char_logit_word_state = get_layer('ff')[1](
-            tparams,
-            next_word_state,
-            options,
-            prefix='ff_char_logit_word_state',
-            activ=None
-        )
 
         char_logit = tensor.tanh(
             char_logit_lstm +
-            char_logit_prev +
-            char_logit_word +
-            char_logit_word_state
+            char_logit_prev
         )
 
         char_logit = get_layer('ff')[1](tparams,
@@ -1321,7 +1121,7 @@ def build_sampler(tparams, options, trng):
 
         # sampled char for the next target, next hidden state to be used
         LOGGER.info('Building f_char_next')
-        inps = [y, yc, init_char_state, cproj_comb_trg, next_word_state]
+        inps = [yc, init_char_state]
         outs = [next_char_probs, next_char_sample, next_char_state]
         f_char_next = theano.function(inps, outs, name='f_char_next',
                                       profile=False)
@@ -1443,13 +1243,13 @@ def gen_sample(tparams,
             wsamp_outs[0], wsamp_outs[2], wsamp_outs[3], wsamp_outs[4]
 
         if options['use_character']:
-            next_char_state, cproj_comb_trg = wsamp_outs[5], wsamp_outs[6]
+            next_char_state = wsamp_outs[5]
 
         # preparation of inputs to beam search
         beam_state = [next_word_state, next_p, next_alphas, next_trg_gates]
 
         if options['use_character']:
-            beam_state += [next_char_state, cproj_comb_trg]
+            beam_state += [next_char_state]
 
         # perform beam search to generate most probable word sequence
         # with limited budget.
@@ -1467,7 +1267,6 @@ def gen_sample(tparams,
         # Perform the nested beam search if the model can handle characters
         # Otherwise, repeat the beam search procedure above.
         if options['use_character']:
-            cproj_comb_trg = numpy.array(word_hypotheses['cproj'])
             init_char_state = numpy.array(word_hypotheses['char_state'])
 
             word_live_k = word_hypotheses['num_samples']
@@ -1490,24 +1289,14 @@ def gen_sample(tparams,
                     ('states', []),
                 ])
 
-                next_w_k = next_w[k_idx]
                 next_c = -1 * numpy.ones((1, )).astype('int64')
                 # hidden state of the rnn decoder for characters
                 next_char_state = numpy.tile(init_char_state[k_idx][None, :],
                                              [char_live_k, 1])
-                cproj_comb_trg_k = cproj_comb_trg[k_idx][None, :]
-                next_word_state_k = next_word_state[k_idx][None, :]
-
                 for jj in xrange(max_word_len):
                     char_live_k = char_hypotheses['num_samples']
-                    cproj_comb_trg_ = numpy.tile(cproj_comb_trg_k,
-                                                 [char_live_k, 1])
-                    next_word_state_ = numpy.tile(next_word_state_k,
-                                                  [char_live_k, 1])
-                    next_w_ = numpy.tile(next_w_k, char_live_k)
 
-                    inps = [next_w_, next_c, next_char_state,
-                            cproj_comb_trg_, next_word_state_]
+                    inps = [next_c, next_char_state]
                     next_pc, next_c, next_char_state = f_char_next(*inps)
 
                     # perform beam search to generate
