@@ -209,6 +209,21 @@ def init_params(options):
                                     prefix='ff_init_char_dec_proj',
                                     nin=options['dim'],
                                     nout=options['char_hid'])
+        params = get_layer('ff')[0](options,
+                                    params,
+                                    prefix='ff_init_char_dec_ctx',
+                                    nin=options['dim']*2,
+                                    nout=options['char_hid'])
+        params = get_layer('ff')[0](options,
+                                    params,
+                                    prefix='ff_init_char_dec_prev_word',
+                                    nin=trg_inp_dim,
+                                    nout=options['char_hid'])
+        params = get_layer('ff')[0](options,
+                                    params,
+                                    prefix='ff_init_char_dec_next_word',
+                                    nin=options['dim_word_trg'],
+                                    nout=options['char_hid'])
         # decoder for target characters
         params = get_layer('gru')[0](
             options,
@@ -384,24 +399,13 @@ def build_model(tparams, options):
     if options['use_character']:
         xc = tensor.matrix('xc', dtype='int64')
         xc_mask = tensor.matrix('xc_mask', dtype='float32')
-        yc_in = tensor.matrix('yc_in', dtype='int64')
-        yc_in_mask = tensor.matrix('yc_in_mask', dtype='float32')
-        yc = tensor.tensor3('yc', dtype='int64')
-        yc_mask = tensor.tensor3('yc_mask', dtype='float32')
-
-        n_nz_words_src = xc.shape[1]
-        n_nz_words_trg = yc_in.shape[1]
-
-        encoder_vars += [xc, xc_mask]
-        decoder_vars += [yc_in, yc_in_mask, yc, yc_mask]
-
         xcr = xc[::-1]  # reverse characters; word order is intact
         xcr_mask = xc_mask[::-1]
-        ycr_in = yc_in[::-1]
-        ycr_in_mask = yc_in_mask[::-1]
 
         n_chars_src = xc.shape[0]
-        n_chars_trg = yc_in.shape[0]
+        n_nz_words_src = xc.shape[1]
+
+        encoder_vars += [xc, xc_mask]
 
         # extract character embeddings
         cemb_src = tparams['Cemb'][xc.flatten()]
@@ -448,10 +452,11 @@ def build_model(tparams, options):
             0.,
             n_words_src * n_samples, cemb_src_dim)
 
-        cproj_comb_src = tensor.set_subtensor(
+        tmp_cproj_comb_src = tensor.set_subtensor(
             tmp_cproj_comb_src[nz_word_src_inds],
             cproj_comb_src)
-        cproj_comb_src = cproj_comb_src.reshape(
+
+        cproj_comb_src = tmp_cproj_comb_src.reshape(
             [
                 n_words_src,
                 n_samples,
@@ -466,10 +471,11 @@ def build_model(tparams, options):
             0.,
             n_words_src * n_samples, cemb_src_dim)
 
-        cprojr_comb_src = tensor.set_subtensor(
+        tmp_cprojr_comb_src = tensor.set_subtensor(
             tmp_cprojr_comb_src[nz_wordr_src_inds],
             cprojr_comb_src)
-        cprojr_comb_src = cprojr_comb_src.reshape(
+
+        cprojr_comb_src = tmp_cprojr_comb_src.reshape(
             [
                 n_words_src,
                 n_samples,
@@ -548,6 +554,19 @@ def build_model(tparams, options):
                                 options['dim_word_trg']])
 
     if options['use_character']:
+        yc_in = tensor.matrix('yc_in', dtype='int64')
+        yc_in_mask = tensor.matrix('yc_in_mask', dtype='float32')
+        yc = tensor.tensor3('yc', dtype='int64')
+        yc_mask = tensor.tensor3('yc_mask', dtype='float32')
+
+        ycr_in = yc_in[::-1]
+        ycr_in_mask = yc_in_mask[::-1]
+
+        n_nz_words_trg = yc_in.shape[1]
+        n_chars_trg = yc_in.shape[0]
+
+        decoder_vars += [yc_in, yc_in_mask, yc, yc_mask]
+
         # character embedding in the target language
         cemb_trg = tparams['Cemb_dec'][yc_in.flatten()]
         cemb_trg = cemb_trg.reshape(
@@ -694,6 +713,9 @@ def build_model(tparams, options):
         """ Character decoder in the target side
 
         """
+        next_wemb_trg = tparams['Wemb_dec'][y.flatten()]
+        next_wemb_trg = wemb_trg.reshape([n_words_trg, n_samples,
+                                          options['dim_word_trg']])
 
         # initial character decoder state
         init_char_dec_proj = get_layer('ff')[1](
@@ -703,8 +725,32 @@ def build_model(tparams, options):
             prefix='ff_init_char_dec_proj',
             activ=None
         )
+        init_char_dec_ctx = get_layer('ff')[1](
+            tparams,
+            ctxs,
+            options,
+            prefix='ff_init_char_dec_ctx',
+            activ=None
+        )
+        init_char_dec_prev_word = get_layer('ff')[1](
+            tparams,
+            trg_inp,
+            options,
+            prefix='ff_init_char_dec_prev_word',
+            activ=None
+        )
+        init_char_dec_next_word = get_layer('ff')[1](
+            tparams,
+            next_wemb_trg,
+            options,
+            prefix='ff_init_char_dec_next_word',
+            activ=None
+        )
         init_char_dec_state = tensor.tanh(
-            init_char_dec_proj
+            init_char_dec_proj +
+            init_char_dec_ctx +
+            init_char_dec_prev_word +
+            init_char_dec_next_word
         )
 
         char_dec_emb = tparams['Cemb_dec'][yc.flatten()]
@@ -918,15 +964,17 @@ def build_sampler(tparams, options, trng):
                                          prefix='ff_word_state',
                                          activ=tensor.tanh)
 
-    LOGGER.info('Building f_init')
+    LOGGER.info('Building f_word_init')
     encoder_outs = [init_word_state, ctx]
     if options['init_decoder'] == 'adaptive':
         encoder_outs.append(word_weights)
     if options['use_character']:
         encoder_outs.append(gates)
 
-    f_init = theano.function(encoder_vars, encoder_outs,
-                             name='f_init', profile=False)
+    f_word_init = theano.function(encoder_vars, encoder_outs,
+                                  name='f_word_init', profile=False)
+
+    f_inits = [f_word_init]
 
     # y: 1 x 1
     y = tensor.vector('y_sampler', dtype='int64')
@@ -970,16 +1018,12 @@ def build_sampler(tparams, options, trng):
         trg_inp = concatenate([wemb_trg, cproj_comb_trg], axis=wemb_trg.ndim-1)
         trg_gates = tensor.alloc(1., 1, 1)
 
-        # if the variables are for the first word,
-        # they  should be all zero.
-        cproj_comb_trg = cproj_comb_trg * (y[:, None] >= 0)
     else:
         trg_inp = wemb_trg
         trg_gates = tensor.alloc(1., 1, 1)
 
     # if it's the first word, emb should be all zero and it is indicated by -1
     trg_inp = trg_inp * (y[:, None] >= 0)
-    wemb_trg = wemb_trg * (y[:, None] >= 0)
 
     # apply one step of conditional gru with attention
     trg_proj = get_layer(options['decoder'])[1](tparams,
@@ -1038,19 +1082,9 @@ def build_sampler(tparams, options, trng):
                     dec_alphas, trg_gates]
 
     if options['use_character']:
-        init_char_dec_proj = get_layer('ff')[1](
-            tparams,
-            next_word_state,
-            options,
-            prefix='ff_init_char_dec_proj',
-            activ=None
-        )
-        next_char_state = tensor.tanh(
-            init_char_dec_proj
-        )
-
         f_wsamp_inps += [yc, yc_mask]
-        f_wsamp_outs += [next_char_state]
+        f_wsamp_outs += [ctxs, trg_inp]
+        # f_wsamp_outs += [ctxs, next_char_state, cproj_comb_trg]
 
     f_word_next = theano.function(f_wsamp_inps, f_wsamp_outs,
                                   name='f_word_next', profile=False)
@@ -1059,6 +1093,56 @@ def build_sampler(tparams, options, trng):
 
     if options['use_character']:
         # NOTE character generator
+
+        next_word_state = tensor.matrix('next_word_state', dtype='float32')
+        next_word_ctxs = tensor.matrix('next_word_ctxs', dtype='float32')
+        prev_word_inps = tensor.matrix('prev_word_inps', dtype='float32')
+        y = tensor.vector('y', dtype='int64')
+
+        init_char_dec_proj = get_layer('ff')[1](
+            tparams,
+            next_word_state,
+            options,
+            prefix='ff_init_char_dec_proj',
+            activ=None
+        )
+        init_char_dec_ctx = get_layer('ff')[1](
+            tparams,
+            next_word_ctxs,
+            options,
+            prefix='ff_init_char_dec_ctx',
+            activ=None
+        )
+        init_char_dec_prev_word = get_layer('ff')[1](
+            tparams,
+            prev_word_inps,
+            options,
+            prefix='ff_init_char_dec_prev_word',
+            activ=None
+        )
+        next_word_emb = tparams['Wemb_dec'][y]
+
+        init_char_dec_next_word = get_layer('ff')[1](
+            tparams,
+            next_word_emb,
+            options,
+            prefix='ff_init_char_dec_next_word',
+            activ=None
+        )
+        next_char_state = tensor.tanh(
+            init_char_dec_proj +
+            init_char_dec_ctx +
+            init_char_dec_prev_word +
+            init_char_dec_next_word
+        )
+
+        LOGGER.info('Building f_char_init')
+        inps = [next_word_state, next_word_ctxs, prev_word_inps, y]
+        outs = next_char_state
+        f_char_init = theano.function(inps, outs, name='f_char_init')
+
+        f_inits.append(f_char_init)
+
         # yc: 1 x # characters
         yc = tensor.vector('yc_sampler', dtype='int64')
         # init_char_state: # characters x char hid dim
@@ -1123,18 +1207,17 @@ def build_sampler(tparams, options, trng):
         LOGGER.info('Building f_char_next')
         inps = [yc, init_char_state]
         outs = [next_char_probs, next_char_sample, next_char_state]
-        f_char_next = theano.function(inps, outs, name='f_char_next',
-                                      profile=False)
+        f_char_next = theano.function(inps, outs, name='f_char_next')
 
         f_nexts.append(f_char_next)
 
-    return f_init, f_nexts
+    return f_inits, f_nexts
 
 
 # generate sample, either with stochastic sampling or beam search. Note that,
 # this function iteratively calls f_init and f_next functions.
 def gen_sample(tparams,
-               f_init,
+               f_inits,
                f_nexts,     # list of functions to generate outputs
                inps,
                options,
@@ -1145,15 +1228,19 @@ def gen_sample(tparams,
                stochastic=True,
                argmax=False):
 
+    assert len(f_inits) == len(f_nexts)
+
     if len(inps) == 2 and len(f_nexts) == 1:
         assert not options['use_character']
 
         x, x_mask = inps
+        f_word_init = f_inits[0]
         f_word_next = f_nexts[0]
     elif len(inps) == 4 and len(f_nexts) == 2:
         assert options['use_character']
 
         x, x_mask, xc, xc_mask = inps
+        f_word_init, f_char_init = f_inits
         f_word_next, f_char_next = f_nexts
     else:
         raise ValueError('The number of input variables should be equal to '
@@ -1183,8 +1270,8 @@ def gen_sample(tparams,
         word_solutions_ds += [('character_samples', [])]
         word_hypotheses_ds += [
             ('character_samples', [[]] * word_live_k),
-            ('char_states', []),
-            ('cproj', []),
+            # ('char_states', []),
+            # ('trg_inp', []),
         ]
 
     word_solutions = OrderedDict(word_solutions_ds)
@@ -1198,8 +1285,9 @@ def gen_sample(tparams,
     # next_state is a summary of hidden states for the input setence
     # ctx0: (# src words x # sentence (i.e., 1) x # hid dim)
     # next_state: (# sentences (i.e., 1) x # hid dim of the target setence)
-    encoder_outs = f_init(*inps)
+    encoder_outs = f_word_init(*inps)
     next_word_state, ctx0 = encoder_outs[0], encoder_outs[1]
+
     if len(encoder_outs) == 3:
         assert (options['init_decoder'] == 'adaptive') ^ \
             options['use_character']
@@ -1207,6 +1295,7 @@ def gen_sample(tparams,
             word_solutions['word_weights'] = encoder_outs[2]
         if options['use_character']:
             word_solutions['word_src_gates'] = encoder_outs[2]
+
     elif len(encoder_outs) == 4:
         assert options['init_decoder'] == 'adaptive'
         assert options['use_character']
@@ -1239,17 +1328,20 @@ def gen_sample(tparams,
         # and previously generated words
         wsamp_outs = f_word_next(*wsamp_inps)
 
-        next_p, next_word_state, next_alphas, next_trg_gates = \
-            wsamp_outs[0], wsamp_outs[2], wsamp_outs[3], wsamp_outs[4]
+        next_p = wsamp_outs[0]
+        next_word_state = wsamp_outs[2]
+        next_alphas = wsamp_outs[3]
+        next_trg_gates = wsamp_outs[4]
 
         if options['use_character']:
-            next_char_state = wsamp_outs[5]
+            next_word_ctxs = wsamp_outs[5]
+            prev_word_inps = wsamp_outs[6]
 
         # preparation of inputs to beam search
         beam_state = [next_word_state, next_p, next_alphas, next_trg_gates]
 
         if options['use_character']:
-            beam_state += [next_char_state]
+            beam_state += [next_word_ctxs, prev_word_inps]
 
         # perform beam search to generate most probable word sequence
         # with limited budget.
@@ -1267,7 +1359,11 @@ def gen_sample(tparams,
         # Perform the nested beam search if the model can handle characters
         # Otherwise, repeat the beam search procedure above.
         if options['use_character']:
-            init_char_state = numpy.array(word_hypotheses['char_state'])
+            next_word_ctxs = numpy.array(word_hypotheses['word_ctxs'])
+            prev_word_inps = numpy.array(word_hypotheses['prev_word_inps'])
+
+            inps = [next_word_state, next_word_ctxs, prev_word_inps, next_w]
+            init_char_state = f_char_init(*inps)
 
             word_live_k = word_hypotheses['num_samples']
             next_chars = [None] * word_live_k
@@ -1293,8 +1389,8 @@ def gen_sample(tparams,
                 # hidden state of the rnn decoder for characters
                 next_char_state = numpy.tile(init_char_state[k_idx][None, :],
                                              [char_live_k, 1])
+
                 for jj in xrange(max_word_len):
-                    char_live_k = char_hypotheses['num_samples']
 
                     inps = [next_c, next_char_state]
                     next_pc, next_c, next_char_state = f_char_next(*inps)
@@ -1419,14 +1515,14 @@ def pred_probs(f_log_probs, options, stream):
     return numpy.array(probs)
 
 
-def save_params(params, filename, symlink=None):
+def save_params(params, uidx, filename, symlink=None):
     """Save the parameters.
 
     Saves the parameters as an ``.npz`` file. It optionally also creates a
     symlink to this archive.
 
     """
-    numpy.savez(filename, **params)
+    numpy.savez(filename, uidx=uidx, **params)
     if symlink:
         if os.path.lexists(symlink):
             os.remove(symlink)

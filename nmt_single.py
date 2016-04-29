@@ -176,6 +176,10 @@ def train(experiment_id, model_options, data_options, validation_options,
 
     uidx = 0
     estop = False
+    if reload_ and os.path.exists(saveto_filename):
+        rmodel = numpy.load(saveto_filename)
+        if 'uidx' in rmodel:
+            uidx = rmodel['uidx']
 
     for eidx in xrange(max_epochs):
         n_samples = 0
@@ -239,7 +243,7 @@ def train(experiment_id, model_options, data_options, validation_options,
                     params = unzip(tparams)
 
                 # save params to exp_id.npz and symlink model.npz to it
-                save_params(params, model_filename, saveto_filename)
+                save_params(params, uidx, model_filename, saveto_filename)
 
             # generate some samples with the model and display them
             if sample_freq > 0 and numpy.mod(uidx, sample_freq) == 0:
@@ -474,7 +478,7 @@ def train(experiment_id, model_options, data_options, validation_options,
         best_p = unzip(tparams)
 
     params = copy.copy(best_p)
-    save_params(params, model_filename, saveto_filename)
+    save_params(params, uidx, model_filename, saveto_filename)
 
     rt.stop()
 

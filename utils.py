@@ -331,10 +331,12 @@ def beam_search(solutions, hypotheses,
     next_state, next_p = bs_state[0], bs_state[1]
 
     if level == 'word':
-        next_alphas, next_trg_gates = bs_state[2], bs_state[3]
+        # next_alphas, next_trg_gates = bs_state[2], bs_state[3]
+        next_alphas = bs_state[2]
 
         if decode_char:
-            next_char_state = bs_state[4]
+            next_word_ctxs, prev_word_inps = \
+                bs_state[4], bs_state[5]
 
     # NLL: the lower, the better
     cand_scores = hypotheses['scores'][:, None] - numpy.log(next_p)
@@ -355,10 +357,11 @@ def beam_search(solutions, hypotheses,
     new_hyp_states = []
 
     if level == 'word':
-        new_hyp_word_trg_gate = []
+        # new_hyp_word_trg_gate = []
         new_hyp_alignment = []
         new_hyp_char_samples = []
-        new_hyp_char_state = []
+        new_hyp_prev_word_inps = []
+        new_hyp_word_ctxs = []
 
     for idx, [ti, wi] in enumerate(zip(trans_indices, word_indices)):
         new_hyp_samples.append(hypotheses['samples'][ti] + [wi])
@@ -380,7 +383,8 @@ def beam_search(solutions, hypotheses,
                 # NOTE just copy of character sequences generated previously
                 new_hyp_char_samples.append(
                     copy.copy(hypotheses['character_samples'][ti]))
-                new_hyp_char_state.append(copy.copy(next_char_state[ti]))
+                new_hyp_prev_word_inps.append(copy.copy(prev_word_inps[ti]))
+                new_hyp_word_ctxs.append(copy.copy(next_word_ctxs[ti]))
 
     # check the finished samples
     updated_hypotheses = OrderedDict([
@@ -396,7 +400,8 @@ def beam_search(solutions, hypotheses,
 
         if decode_char:
             updated_hypotheses['character_samples'] = []
-            updated_hypotheses['char_state'] = []
+            updated_hypotheses['prev_word_inps'] = []
+            updated_hypotheses['word_ctxs'] = []
 
     for idx in xrange(len(new_hyp_samples)):
         if new_hyp_samples[idx][-1] == 0:
@@ -427,8 +432,10 @@ def beam_search(solutions, hypotheses,
                 if decode_char:
                     updated_hypotheses['character_samples'].append(
                         new_hyp_char_samples[idx])
-                    updated_hypotheses['char_state'].append(
-                        new_hyp_char_state[idx])
+                    updated_hypotheses['prev_word_inps'].append(
+                        new_hyp_prev_word_inps[idx])
+                    updated_hypotheses['word_ctxs'].append(
+                        new_hyp_word_ctxs[idx])
 
     assert updated_hypotheses['num_samples'] + solutions['num_samples'] == k
 
