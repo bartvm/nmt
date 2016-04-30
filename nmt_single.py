@@ -285,8 +285,8 @@ def train(experiment_id, model_options, data_options, validation_options,
                     ss = word_sample[word_score.argmin()]
                     word_alignment = word_alignment[word_score.argmin()]
 
-                    if model_options['use_character']:
-                        '''
+                    if model_options['use_character'] and \
+                       model_options['unk_gate']:
                         word_src_gates = word_solutions['word_src_gates']
                         log_entry['samples'][-1]['word_gates_src'] = \
                             numpy.array2string(
@@ -303,7 +303,6 @@ def train(experiment_id, model_options, data_options, validation_options,
                                 word_trg_gates.T,
                                 precision=2, max_line_width=500,
                                 suppress_small=True)
-                        '''
 
                     if model_options['init_decoder'] == 'adaptive':
                         word_weights = word_solutions['word_weights']

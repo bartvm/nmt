@@ -53,13 +53,16 @@
     "n_chars_trg": 150,
     "n_words_src": 50000,
     "n_words_trg": 50000,
-    "max_src_length": 50,
-    "max_trg_length": 50
+    "max_src_word_length": 50,
+    "max_trg_word_length": 50,
+    "max_src_char_length": 300,
+    "max_trg_char_length": 300
   },
   "model": {
     "dim": 1024,
     "use_dropout": false,
     "use_character": true,
+    "unk_gate": true,
     "encoder": "gru",
     "decoder": "gru_cond",
     "init_decoder": "last",
