@@ -222,15 +222,17 @@ class RepeatedTimer(object):
         # check if the function is running
         if not self._is_func_running:
             self._is_func_running = True
+            ret = None
             try:
                 ret = self.function(*self.args, **self.kwargs)
-                self._ret_queue.put(ret)
             except RuntimeError as err:
                 print(err, file=sys.stderr)
 
                 # stop the timer
                 self.stop()
 
+            if ret:
+                self._ret_queue.put(ret)
             self._is_func_running = False
 
     def start(self):

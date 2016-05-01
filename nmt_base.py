@@ -28,7 +28,7 @@ def validation(tparams, process_queue, translator_cmd, evaluator_cmd,
 
     # We need to make sure that the model remains unchanged during evaluation
     model = unzip(tparams)
-    save_params(model, model_filename)
+    save_params(model, -1, model_filename)
 
     # Translation runs on CPUs with BLAS
     env_THEANO_FLAGS = 'device=cpu,floatX=%s,optimizer=%s' % (
@@ -40,14 +40,13 @@ def validation(tparams, process_queue, translator_cmd, evaluator_cmd,
 
     trans_proc = subprocess.Popen(translator_cmd, env=env,
                                   stdout=subprocess.PIPE,
-                                  stderr=subprocess.PIPE)
+                                  stderr=subprocess.PIPE,
+                                  preexec_fn=os.setsid)
 
     # put the process into the queue for signal handling
     process_queue.put(trans_proc)
 
     output_msg, error_msg = trans_proc.communicate()
-
-    process_queue.get()
 
     if trans_proc.returncode == 1:
         raise RuntimeError("%s\nFailed to translate sentences" % error_msg)
@@ -57,7 +56,8 @@ def validation(tparams, process_queue, translator_cmd, evaluator_cmd,
             eval_proc = subprocess.Popen(evaluator_cmd,
                                          stdin=trans_result_f,
                                          stdout=subprocess.PIPE,
-                                         stderr=subprocess.PIPE)
+                                         stderr=subprocess.PIPE,
+                                         preexec_fn=os.setsid)
 
             process_queue.put(eval_proc)
 
@@ -66,8 +66,6 @@ def validation(tparams, process_queue, translator_cmd, evaluator_cmd,
             # extra part of the output is ignored.
 
             out_msg, err_msg = eval_proc.communicate()
-
-            process_queue.get()
 
             if eval_proc.returncode == 1:
 
@@ -88,6 +86,9 @@ def validation(tparams, process_queue, translator_cmd, evaluator_cmd,
     except IOError:
         # LOGGER.error('Translation cannot be found, so that BLEU set to 0')
         evaluation_score = (0., 0., 0., 0., 0.)
+
+    while not process_queue.empty():
+        process_queue.get()
 
     return (model, evaluation_score)
 

@@ -22,7 +22,7 @@ from utils import (load_params, init_tparams, prepare_character_tensor)
 # utility function
 def _send_jobs(fname, queue, char_dict_src, word_dict_src,
                n_chars_src, n_words_src):
-    with io.open(fname, 'r') as f:
+    with io.open(fname, 'r', encoding='utf8') as f:
         for idx, line in enumerate(f):
             line = line.strip()
             words = line.split()
@@ -64,7 +64,7 @@ def translate_model(exit_event, queue, rqueue, pid,
     tparams = init_tparams(params)
 
     # word index
-    f_init, f_nexts = build_sampler(tparams, options, trng)
+    f_inits, f_nexts = build_sampler(tparams, options, trng)
 
     def _seq2words(seq, word_idict_trg):
         words = []
@@ -103,7 +103,7 @@ def translate_model(exit_event, queue, rqueue, pid,
             inps += [xc, xc_mask]
 
         # sample given an input sequence and obtain scores
-        word_solutions = gen_sample(tparams, f_init, f_nexts,
+        word_solutions = gen_sample(tparams, f_inits, f_nexts,
                                     inps,
                                     options, trng=trng,
                                     k=k, max_sent_len=200,
@@ -261,9 +261,7 @@ def main(model_path, option_path,
             args=(exit_event, queue, rqueue, midx, word_idict_trg,
                   char_idict_trg, model_path, options, k, normalize,
                   unk_replace, use_character))
-
-    for proc in processes:
-        proc.start()
+        processes[midx].start()
 
     signal.signal(signal.SIGINT, default_sigint_handler)
 
@@ -283,21 +281,31 @@ def main(model_path, option_path,
             rqueue.get()
 
     def _signal_handler(signum, frame):
-        # print('Received an interrpt signal.')
-        # print('Please wait for releasing resources...')
+        _stop_child_processes()
+        _clear_resources()
 
+    signal.signal(signal.SIGINT, _signal_handler)
+
+    for proc in processes:
+        while proc.exitcode is None:
+            proc.join()
+
+    if exit_event.is_set():
         _stop_child_processes()
         _clear_resources()
 
         sys.exit(130)
 
-    signal.signal(signal.SIGINT, _signal_handler)
-
-    # collecting translated sentences from the return queue
-    trans = _retrieve_jobs(rqueue, n_samples)
-
     try:
-        with io.open(saveto, 'w') as f:
+        try:
+            assert rqueue.qsize() == n_samples
+        except AssertionError:
+            raise Exception('Translation seems to be interrupted')
+
+        # collecting translated sentences from the return queue
+        trans = _retrieve_jobs(rqueue, n_samples)
+
+        with io.open(saveto, 'w', encoding='utf8') as f:
             print('\n'.join(trans), file=f)
     except Exception:
         print(traceback.format_exc(), file=sys.stderr)
