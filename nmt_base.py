@@ -588,8 +588,6 @@ def build_model(tparams, options):
     if options['use_character']:
         yc_in = tensor.matrix('yc_in', dtype='int64')
         yc_in_mask = tensor.matrix('yc_in_mask', dtype='float32')
-        yc = tensor.tensor3('yc', dtype='int64')
-        yc_mask = tensor.tensor3('yc_mask', dtype='float32')
 
         ycr_in = yc_in[::-1]
         ycr_in_mask = yc_in_mask[::-1]
@@ -597,7 +595,8 @@ def build_model(tparams, options):
         n_nz_words_trg = yc_in.shape[1]
         n_chars_trg = yc_in.shape[0]
 
-        decoder_vars += [yc_in, yc_in_mask, yc, yc_mask]
+        # decoder_vars += [yc_in, yc_in_mask, yc, yc_mask]
+        decoder_vars += [yc_in, yc_in_mask]
 
         # character embedding in the target language
         cemb_trg = tparams['Cemb_dec'][yc_in.flatten()]
@@ -794,12 +793,18 @@ def build_model(tparams, options):
             init_char_dec_next_word
         )
 
-        char_dec_emb = tparams['Cemb_dec'][yc.flatten()]
+        nz_words_trg_inds = y_mask.flatten().nonzero()
+        n_nz_words_trg = yc_in.shape[1]
+
+        tmp_init_char_dec_state = init_char_dec_state.reshape(
+            [n_words_trg * n_samples, options['char_hid']])
+        init_char_dec_state = tmp_init_char_dec_state[nz_words_trg_inds]
+
+        char_dec_emb = tparams['Cemb_dec'][yc_in.flatten()]
         char_dec_emb = char_dec_emb.reshape(
             [
                 n_chars_trg,
-                n_words_trg,
-                n_samples,
+                n_nz_words_trg,
                 options['dim_char_trg']
             ]
         )
@@ -814,20 +819,20 @@ def build_model(tparams, options):
                                           char_dec_emb,
                                           options,
                                           prefix='char_decoder',
-                                          mask=yc_mask,
+                                          mask=yc_in_mask,
                                           init_state=init_char_dec_state)
-        # proj_char_h: (# chars x # words x # samples x char hid dim)
+        # proj_char_h: (# chars x # nonzero words x char hid dim)
         proj_char_h = proj_char_h[0]
 
         # from hidden of character at i of word at t to character t,i
-        # char_logit_lstm: (# chars x # words x # samples x trg char dim)
+        # char_logit_lstm: (# chars x # nonzero words x trg char dim)
         char_logit_lstm = get_layer('ff')[1](tparams,
                                              proj_char_h,
                                              options,
                                              prefix='ff_char_logit_lstm',
                                              activ=None)
         # from character t,(i-1) to character t,i
-        # char_logit_prev: (# chars x # words x # samples x trg char dim)
+        # char_logit_prev: (# chars x # nonzero words x trg char dim)
         char_logit_prev = get_layer('ff')[1](tparams,
                                              char_dec_emb,
                                              options,
@@ -849,20 +854,32 @@ def build_model(tparams, options):
         char_logit_shp = char_logit.shape
         char_probs = tensor.nnet.softmax(char_logit.reshape(
             [
-                char_logit_shp[0] * char_logit_shp[1] * char_logit_shp[2],
-                char_logit_shp[3]
+                char_logit_shp[0] * char_logit_shp[1],
+                char_logit_shp[2]
             ]
         ))
 
         # compute character cost
-        yc_flat = yc.flatten()
-        yc_shp = yc.shape
-        yc_flat_idx = tensor.arange(yc_flat.shape[0]) * options['n_chars_trg'] + \
-            yc_flat
-        char_cost = -tensor.log(char_probs.flatten()[yc_flat_idx])
-        char_cost = char_cost.reshape([yc_shp[0], yc_shp[1], yc_shp[2]])
+        yc_in_flat = yc_in.flatten()
+        yc_in_shp = yc_in.shape
+        yc_in_flat_idx = tensor.arange(yc_in_flat.shape[0]) * options['n_chars_trg'] + \
+            yc_in_flat
+        char_cost = -tensor.log(char_probs.flatten()[yc_in_flat_idx])
+        char_cost = char_cost.reshape([yc_in_shp[0], yc_in_shp[1]])
+
         # sum of losses over characters in a word
-        char_cost = (char_cost * yc_mask).sum(0)
+        char_cost = (char_cost * yc_in_mask).sum(0)
+
+        char_cost_orig = tensor.alloc(
+            0.,
+            n_words_trg * n_samples)
+
+        char_cost_orig = tensor.set_subtensor(
+            char_cost_orig[nz_words_trg_inds],
+            char_cost)
+        char_cost = char_cost_orig.reshape(
+            [n_words_trg, n_samples])
+
         # summing losses over all words in a sentence
         char_cost = char_cost.sum(0)
         char_cost.name = 'char_cost'
@@ -1342,8 +1359,6 @@ def gen_sample(tparams,
         word_solutions_ds += [('character_samples', [])]
         word_hypotheses_ds += [
             ('character_samples', [[]] * word_live_k),
-            # ('char_states', []),
-            # ('trg_inp', []),
         ]
 
     word_solutions = OrderedDict(word_solutions_ds)
@@ -1401,6 +1416,7 @@ def gen_sample(tparams,
         wsamp_outs = f_word_next(*wsamp_inps)
 
         next_p = wsamp_outs[0]
+        # next_word_sample = wsamp_outs[1]  XXX Not used
         next_word_state = wsamp_outs[2]
         next_alphas = wsamp_outs[3]
         next_trg_gates = wsamp_outs[4]
@@ -1572,7 +1588,7 @@ def pred_probs(f_log_probs, options, stream):
             yc_in_mask = yc_in_mask[:, y_mask.flatten() > 0]
 
             encoder_inps += [xc_in, xc_in_mask]
-            decoder_inps += [yc_in, yc_in_mask, yc, yc_mask]
+            decoder_inps += [yc_in, yc_in_mask]
 
         inps = encoder_inps + decoder_inps
 
