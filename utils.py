@@ -5,13 +5,11 @@ from theano import tensor
 import warnings
 import six
 from six.moves import xrange
-import pickle
 import sys
 import itertools
 import copy
 
 import numpy
-import inspect
 from threading import Timer
 from collections import OrderedDict
 
@@ -135,71 +133,6 @@ def concatenate(tensor_list, axis=0):
         offset += tt.shape[axis]
 
     return out
-
-
-class Parameters():
-    def __init__(self):
-        # self.__dict__['tparams'] = dict()
-        self.__dict__['tparams'] = OrderedDict()
-
-    def __setattr__(self, name, array):
-        tparams = self.__dict__['tparams']
-        # if name not in tparams:
-        tparams[name] = array
-
-    def __setitem__(self, name, array):
-        self.__setattr__(name, array)
-
-    def __getitem__(self, name):
-        return self.__getattr__(name)
-
-    def __getattr__(self, name):
-        tparams = self.__dict__['tparams']
-        return tparams[name]
-
-    # def __getattr__(self):
-    # return self.get()
-
-    def remove(self, name):
-        del self.__dict__['tparams'][name]
-
-    def get(self):
-        return self.__dict__['tparams']
-
-    def values(self):
-        tparams = self.__dict__['tparams']
-        return tparams.values()
-
-    def save(self, filename):
-        tparams = self.__dict__['tparams']
-        pickle.dump({p: tparams[p] for p in tparams}, open(filename, 'wb'), 2)
-
-    def load(self, filename):
-        tparams = self.__dict__['tparams']
-        loaded = pickle.load(open(filename, 'rb'), encoding='latin1')
-        for k in loaded:
-            tparams[k] = loaded[k]
-
-    def setvalues(self, values):
-        tparams = self.__dict__['tparams']
-        for p, v in zip(tparams, values):
-            tparams[p] = v
-
-    def __enter__(self):
-        _, _, _, env_locals = inspect.getargvalues(inspect.currentframe(
-        ).f_back)
-        self.__dict__['_env_locals'] = env_locals.keys()
-
-    def __exit__(self, type, value, traceback):
-        _, _, _, env_locals = inspect.getargvalues(inspect.currentframe(
-        ).f_back)
-        prev_env_locals = self.__dict__['_env_locals']
-        del self.__dict__['_env_locals']
-        for k in env_locals.keys():
-            if k not in prev_env_locals:
-                self.__setattr__(k, env_locals[k])
-                env_locals[k] = self.__getattr__(k)
-        return True
 
 
 class RepeatedTimer(object):

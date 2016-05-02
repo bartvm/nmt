@@ -70,7 +70,8 @@ def train(experiment_id, model_options, data_options, validation_options,
     inps = encoder_vars + decoder_vars
 
     LOGGER.info('Building sampler')
-    f_enc_init, f_sample_nexts = build_sampler(tparams, model_options, trng)
+    f_sample_inits, f_sample_nexts \
+        = build_sampler(tparams, model_options, trng)
 
     # before any regularizer
     LOGGER.info('Building functions to compute log prob')
@@ -188,7 +189,6 @@ def train(experiment_id, model_options, data_options, validation_options,
             rt.start()
         for eidx in xrange(max_epochs):
             n_samples = 0
-
             for xc, x, x_mask, \
                     yc, y, y_mask in train_stream.get_epoch_iterator():
 
@@ -278,7 +278,8 @@ def train(experiment_id, model_options, data_options, validation_options,
                             ]
 
                         word_solutions = gen_sample(tparams,
-                                                    f_enc_init, f_sample_nexts,
+                                                    f_sample_inits,
+                                                    f_sample_nexts,
                                                     sample_encoder_inps,
                                                     model_options,
                                                     trng=trng,
