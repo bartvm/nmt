@@ -44,9 +44,12 @@ def train(experiment_id, model_options, data_options, validation_options,
           saveto,
           valid_freq,
           eval_intv,    # time interval for evaluation in minutes
+          time_limit,
           save_freq,   # save the parameters after every saveFreq updates
           sample_freq,   # generate some samples after every sampleFreq
           reload_=False):
+
+    start_time = time.time()
 
     worddicts_r, train_stream, valid_stream = load_data(**data_options)
 
@@ -149,7 +152,7 @@ def train(experiment_id, model_options, data_options, validation_options,
                                       eval_intv, valid_ret_queue,
                                       **validation_options)
 
-    def _timer_signal_handler(signum, frame):
+    def cancel_validation_process():
         LOGGER.info('Now attempting to stop the timer')
         if rt:
             rt.stop()
@@ -165,6 +168,10 @@ def train(experiment_id, model_options, data_options, validation_options,
                 # os.killpg(proc.pid, signal.SIGINT)
                 # os.kill(proc.pid, signal.SIGINT)
 
+    def _timer_signal_handler(signum, frame):
+
+        cancel_validation_process()
+
         while not valid_ret_queue.empty():
             valid_ret_queue.get()
 
@@ -178,21 +185,27 @@ def train(experiment_id, model_options, data_options, validation_options,
     bad_counter = 0
 
     uidx = 0
+    uidx_restore = 0
     estop = False
     if reload_ and os.path.exists(saveto_filename):
         rmodel = numpy.load(saveto_filename)
         if 'uidx' in rmodel:
-            uidx = rmodel['uidx']
+            uidx_restore = rmodel['uidx']
 
     try:
         if rt:
             rt.start()
-        for eidx in xrange(max_epochs):
+        for epoch in xrange(0, max_epochs):
             n_samples = 0
             for xc, x, x_mask, \
                     yc, y, y_mask in train_stream.get_epoch_iterator():
 
                 n_samples += len(x)
+
+                uidx += 1
+                if uidx < uidx_restore:
+                    continue
+
                 x, x_mask, y, y_mask = x.T, x_mask.T, y.T, y_mask.T
 
                 encoder_inps = [x, x_mask]
@@ -220,8 +233,7 @@ def train(experiment_id, model_options, data_options, validation_options,
 
                 use_noise.set_value(1.)
 
-                uidx += 1
-                log_entry = {'iteration': uidx, 'epoch': eidx}
+                log_entry = {'iteration': uidx, 'epoch': epoch}
 
                 # compute cost, grads and copy grads to shared variables
                 update_start = time.clock()
@@ -465,6 +477,17 @@ def train(experiment_id, model_options, data_options, validation_options,
                 if uidx >= finish_after:
                     LOGGER.info('Finishing after {} iterations'.format(uidx))
                     estop = True
+                    break
+
+                if time_limit > 0 and \
+                   (time.time() - start_time > time_limit * 60):
+
+                    LOGGER.info('Time limit {} mins is over'.format(
+                        time_limit))
+                    estop = True
+
+                    cancel_validation_process()
+
                     break
 
                 log.log(log_entry)
