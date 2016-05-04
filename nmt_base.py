@@ -1456,6 +1456,7 @@ def gen_sample(tparams,
 
             word_live_k = word_hypotheses['num_samples']
             next_chars = [None] * word_live_k
+            char_level_scores = numpy.zeros((word_live_k, )).astype('float32')
 
             # perform nested beam search for character sequences
             for k_idx in xrange(word_live_k):
@@ -1513,14 +1514,22 @@ def gen_sample(tparams,
                 # for the current word sequences (beam)
                 char_sample_scores = char_solutions['scores'] /\
                     numpy.array([len(s) for s in char_solutions['samples']])
-                cc = char_solutions['samples'][
-                    char_sample_scores[1:].argmin()+1]
+                # NOTE XXX This is a trick to prevent the model
+                # from generating white spaces.
+                low_char_seq_score_idx = char_sample_scores[1:].argmin() + 1
+                cc = char_solutions['samples'][low_char_seq_score_idx]
                 next_chars[k_idx] = cc
+
+                char_level_scores[k_idx] = char_sample_scores[
+                    low_char_seq_score_idx]
 
             # NOTE adding chosen character seuqneces into word hypotheses
             assert len(next_chars) == word_hypotheses['num_samples']
             for idx, char_seq in enumerate(next_chars):
                 word_hypotheses['character_samples'][idx].append(char_seq)
+
+            # NOTE Add scores of generated charcacters to word-level solutions.
+            word_hypotheses['scores'] += char_level_scores
 
             # NOTE character sequences into matrix
             max_char_len = numpy.max(
