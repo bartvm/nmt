@@ -52,7 +52,7 @@ def validation(tparams, process_queue, translator_cmd, evaluator_cmd,
         raise RuntimeError("%s\nFailed to translate sentences" % error_msg)
 
     try:
-        with io.open(trans_valid_src, 'r') as trans_result_f:
+        with io.open(trans_valid_src, 'r', encoding='utf-8') as trans_result_f:
             eval_proc = subprocess.Popen(evaluator_cmd,
                                          stdin=trans_result_f,
                                          stdout=subprocess.PIPE,
