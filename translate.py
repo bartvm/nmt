@@ -280,32 +280,19 @@ def main(model_path, option_path,
         while not rqueue.empty():
             rqueue.get()
 
+        sys.exit(130)
+
     def _signal_handler(signum, frame):
         _stop_child_processes()
         _clear_resources()
 
     signal.signal(signal.SIGINT, _signal_handler)
 
-    for proc in processes:
-        while proc.exitcode is None:
-            proc.join()
-
-    if exit_event.is_set():
-        _stop_child_processes()
-        _clear_resources()
-
-        sys.exit(130)
-
     try:
-        try:
-            assert rqueue.qsize() == n_samples
-        except AssertionError:
-            raise Exception('Translation seems to be interrupted')
-
         # collecting translated sentences from the return queue
         trans = _retrieve_jobs(rqueue, n_samples)
 
-        with io.open(saveto, 'w', encoding='utf8') as f:
+        with io.open(saveto, 'w', encoding='utf-8') as f:
             print('\n'.join(trans), file=f)
     except Exception:
         print(traceback.format_exc(), file=sys.stderr)
