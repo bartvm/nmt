@@ -181,6 +181,7 @@ def train(experiment_id, model_options, data_options, validation_options,
 
     train_start = time.clock()
     best_p = None
+    best_at_uidx = 0
     best_score = 0
     bad_counter = 0
 
@@ -260,11 +261,14 @@ def train(experiment_id, model_options, data_options, validation_options,
 
                     if best_p is not None:
                         params = best_p
+                        save_at_uidx = best_at_uidx
                     else:
                         params = unzip(tparams)
+                        save_at_uidx = uidx
 
                     # save params to exp_id.npz and symlink model.npz to it
-                    save_params(params, uidx, model_filename, saveto_filename)
+                    save_params(params, save_at_uidx, model_filename,
+                                saveto_filename)
 
                 # generate some samples with the model and display them
                 if sample_freq > 0 and numpy.mod(uidx, sample_freq) == 0:
@@ -466,6 +470,7 @@ def train(experiment_id, model_options, data_options, validation_options,
                     if valid_bleu > best_score:
                         best_p = ret_model
                         best_score = valid_bleu
+                        best_at_uidx = uidx
                         bad_counter = 0
                     else:
                         bad_counter += 1
