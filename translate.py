@@ -22,7 +22,7 @@ from utils import (load_params, init_tparams, prepare_character_tensor)
 # utility function
 def _send_jobs(fname, queue, char_dict_src, word_dict_src,
                n_chars_src, n_words_src):
-    with io.open(fname, 'r', encoding='utf8') as f:
+    with io.open(fname, 'r', encoding='utf-8') as f:
         for idx, line in enumerate(f):
             line = line.strip()
             words = line.split()
