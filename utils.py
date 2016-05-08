@@ -5,7 +5,7 @@ from theano import tensor
 import warnings
 import six
 from six.moves import xrange
-import sys
+# import sys
 import itertools
 import copy
 
@@ -159,10 +159,9 @@ class RepeatedTimer(object):
             try:
                 ret = self.function(*self.args, **self.kwargs)
             except RuntimeError as err:
-                print(err, file=sys.stderr)
-
                 # stop the timer
                 self.stop()
+                ret = [Exception(err)]
 
             if ret:
                 self._ret_queue.put(ret)

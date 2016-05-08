@@ -462,7 +462,17 @@ def train(experiment_id, model_options, data_options, validation_options,
                 # collect validation scores (e.g., BLEU) from the child thread
                 if not valid_ret_queue.empty():
 
-                    (ret_model, scores) = valid_ret_queue.get()
+                    valid_ret = valid_ret_queue.get()
+                    if len(valid_ret) == 1:
+                        cancel_validation_process()
+
+                        while not valid_ret_queue.empty():
+                            valid_ret_queue.get()
+
+                        raise valid_ret[0]
+                    else:
+                        assert len(valid_ret)
+                        ret_model, scores = valid_ret
 
                     valid_bleu = scores[0]
                     log_entry['validation_bleu'] = valid_bleu
