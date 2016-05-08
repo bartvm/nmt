@@ -57,6 +57,7 @@ def train(experiment_id, model_options, data_options, validation_options,
     params = init_params(model_options)
     # reload parameters
     model_filename = '{}.model.npz'.format(experiment_id)
+    temp_model_filename = '{}.model.temp.npz'.format(experiment_id)
     model_option_filename = '{}.config.json'.format(experiment_id)
     saveto_filename = '{}.npz'.format(saveto)
     if reload_ and os.path.exists(saveto_filename):
@@ -147,7 +148,8 @@ def train(experiment_id, model_options, data_options, validation_options,
 
     rt = None
     if eval_intv > 0:
-        rt = prepare_validation_timer(tparams, process_queue, model_filename,
+        rt = prepare_validation_timer(tparams, process_queue,
+                                      temp_model_filename,
                                       model_option_filename,
                                       eval_intv, valid_ret_queue,
                                       **validation_options)
