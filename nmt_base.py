@@ -31,9 +31,11 @@ def validation(tparams, process_queue, translator_cmd, evaluator_cmd,
     save_params(model, -1, model_filename)
 
     # Translation runs on CPUs with BLAS
-    env_THEANO_FLAGS = 'device=cpu,floatX=%s,optimizer=%s' % (
-        theano.config.floatX,
-        theano.config.optimizer)
+    env_THEANO_FLAGS = \
+        'device=cpu,floatX=%s,optimizer=%s,base_compiledir=%s' % (
+            theano.config.floatX,
+            theano.config.optimizer,
+            'translate_compiledir')
 
     env = dict(os.environ, **{'OMP_NUM_THREADS': '1',
                               'THEANO_FLAGS': env_THEANO_FLAGS})
