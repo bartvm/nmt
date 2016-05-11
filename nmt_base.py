@@ -972,21 +972,17 @@ def build_sampler(tparams, options, trng):
             src_inpr = word_gate_src_r * wembr_src + \
                 (1 - word_gate_src_r) * cprojr_comb_src
 
-            src_gates = concatenate(
-                [
-                    (word_gate_src >= 0.8).sum(2),
-                    (1-word_gate_src >= 0.5).sum(2)
-                ], axis=1) / word_gate_src.shape[2].astype('float32')
+            src_gates = word_gate_src.mean(2)
         else:
             src_inp = concatenate([wemb_src, cproj_comb_src],
                                   axis=wemb_src.ndim-1)
             src_inpr = concatenate([wembr_src, cprojr_comb_src],
                                    axis=wembr_src.ndim-1)
-            src_gates = tensor.alloc(1., src_inp.shape[0], 1)
+            src_gates = tensor.alloc(1., n_words_src, n_samples)
     else:
         src_inp = wemb_src
         src_inpr = wembr_src
-        src_gates = tensor.alloc(1., src_inp.shape[0], 1)
+        src_gates = tensor.alloc(1., n_words_src, n_samples)
 
     # encoder
     src_proj = get_layer(options['encoder'])[1](tparams,
@@ -1100,11 +1096,7 @@ def build_sampler(tparams, options, trng):
             trg_inp = word_gate_trg * wemb_trg + \
                 (1 - word_gate_trg) * cproj_comb_trg
 
-            trg_gates = concatenate(
-                [
-                    (word_gate_trg >= 0.8).sum(1, keepdims=True),
-                    (1-word_gate_trg >= 0.5).sum(1, keepdims=True)
-                ], axis=1) / word_gate_trg.shape[1].astype('float32')
+            trg_gates = word_gate_trg.mean(1)
         else:
             trg_inp = concatenate([wemb_trg, cproj_comb_trg],
                                   axis=wemb_trg.ndim-1)
