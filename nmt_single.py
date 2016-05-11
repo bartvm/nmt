@@ -32,7 +32,8 @@ logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger(__name__)
 
 
-def train(experiment_id, model_options, data_options, validation_options,
+def train(experiment_id, data_base_path,
+          model_options, data_options, validation_options,
           patience,  # early stopping patience
           max_epochs,
           finish_after,  # finish after this many updates
@@ -50,6 +51,19 @@ def train(experiment_id, model_options, data_options, validation_options,
           reload_=False):
 
     start_time = time.time()
+
+    def join_data_base_path(data_base, options):
+        for kk, vv in six.iteritems(options):
+            if kk in ['src', 'trg', 'src_char_vocab', 'trg_char_vocab',
+                      'src_word_vocab', 'trg_word_vocab', 'valid_src',
+                      'valid_trg', 'trans_valid_src']:
+                options[kk] = os.path.join(data_base, options[kk])
+
+        return options
+
+    data_options = join_data_base_path(data_base_path, data_options)
+    validation_options = join_data_base_path(data_base_path,
+                                             validation_options)
 
     worddicts_r, train_stream, valid_stream = load_data(**data_options)
 
@@ -553,8 +567,14 @@ if __name__ == "__main__":
     # Load the configuration file
     with io.open(sys.argv[1]) as f:
         config = json.load(f)
+    if len(sys.argv) == 3:
+        data_base_path = os.path.realpath(sys.argv[2])
+    else:
+        data_base_path = os.getcwd()
+
     # Create unique experiment ID and backup config file
     experiment_id = binascii.hexlify(os.urandom(3)).decode()
     shutil.copyfile(sys.argv[1], '{}.config.json'.format(experiment_id))
-    train(experiment_id, config['model'], config['data'], config['validation'],
+    train(experiment_id, data_base_path, config['model'], config['data'],
+          config['validation'],
           **merge(config['training'], config['management']))
