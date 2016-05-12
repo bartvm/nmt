@@ -5,7 +5,6 @@ from theano import tensor
 import warnings
 import six
 from six.moves import xrange
-# import sys
 import itertools
 import copy
 
@@ -155,17 +154,15 @@ class RepeatedTimer(object):
         # check if the function is running
         if not self._is_func_running:
             self._is_func_running = True
-            ret = None
             try:
                 ret = self.function(*self.args, **self.kwargs)
             except RuntimeError as err:
                 # stop the timer
                 self.stop()
                 ret = [Exception(err)]
-
-            if ret:
+            finally:
                 self._ret_queue.put(ret)
-            self._is_func_running = False
+                self._is_func_running = False
 
     def start(self):
         if not self._is_running:

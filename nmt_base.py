@@ -35,7 +35,7 @@ def validation(tparams, process_queue, translator_cmd, evaluator_cmd,
         'device=cpu,floatX=%s,optimizer=%s,base_compiledir=%s' % (
             theano.config.floatX,
             theano.config.optimizer,
-            'translate_compiledir')
+            theano.config.base_compiledir)
 
     env = dict(os.environ, **{'OMP_NUM_THREADS': '1',
                               'THEANO_FLAGS': env_THEANO_FLAGS})
