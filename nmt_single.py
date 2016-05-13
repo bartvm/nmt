@@ -81,6 +81,9 @@ def train(experiment_id, data_base_path,
     LOGGER.info('Initializing parameters')
     tparams = init_tparams(params)
 
+    # hold a copy of parameters being used for validation
+    valid_params = unzip(tparams)
+
     # use_noise is for dropout
     trng, use_noise, encoder_vars, decoder_vars, \
         opt_ret, costs = build_model(tparams, model_options)
@@ -162,7 +165,7 @@ def train(experiment_id, data_base_path,
 
     rt = None
     if eval_intv > 0:
-        rt = prepare_validation_timer(tparams, process_queue,
+        rt = prepare_validation_timer(valid_params, process_queue,
                                       temp_model_filename,
                                       model_option_filename,
                                       eval_intv, valid_ret_queue,
@@ -285,6 +288,9 @@ def train(experiment_id, data_base_path,
                     # save params to exp_id.npz and symlink model.npz to it
                     save_params(params, save_at_uidx, model_filename,
                                 saveto_filename)
+
+                    # update validation parameter
+                    valid_params = unzip(tparams, valid_params)
 
                 # generate some samples with the model and display them
                 if sample_freq > 0 and numpy.mod(uidx, sample_freq) == 0:

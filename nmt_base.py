@@ -15,7 +15,7 @@ from six.moves import xrange
 from theano import tensor
 from theano.sandbox.rng_mrg import MRG_RandomStreams
 
-from utils import (unzip, RepeatedTimer,
+from utils import (RepeatedTimer,
                    dropout_layer, norm_weight, concatenate,
                    prepare_character_tensor, beam_search)
 from layers import get_layer
@@ -23,11 +23,10 @@ from layers import get_layer
 LOGGER = logging.getLogger(__name__)
 
 
-def validation(tparams, process_queue, translator_cmd, evaluator_cmd,
+def validation(model, process_queue, translator_cmd, evaluator_cmd,
                model_filename, trans_valid_src):
 
     # We need to make sure that the model remains unchanged during evaluation
-    model = unzip(tparams)
     save_params(model, -1, model_filename)
 
     # Translation runs on CPUs with BLAS
@@ -95,7 +94,7 @@ def validation(tparams, process_queue, translator_cmd, evaluator_cmd,
     return (model, evaluation_score)
 
 
-def prepare_validation_timer(tparams,
+def prepare_validation_timer(model,
                              process_queue,
                              model_filename,
                              model_option_filename,
@@ -136,7 +135,7 @@ def prepare_validation_timer(tparams,
         valid_trg,
     ]
 
-    args = (tparams, process_queue)
+    args = [model, process_queue]
     kwargs = {'translator_cmd': translator_cmd,
               'evaluator_cmd': evaluator_cmd,
               'model_filename': model_filename,

@@ -20,8 +20,12 @@ def zipp(params, tparams):
 
 
 # pull parameters from Theano shared variables
-def unzip(zipped):
-    new_params = OrderedDict()
+def unzip(zipped, params=None):
+    if not params:
+        new_params = OrderedDict()
+    else:
+        new_params = params
+
     for kk, vv in six.iteritems(zipped):
         new_params[kk] = vv.get_value()
     return new_params
