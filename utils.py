@@ -31,6 +31,14 @@ def unzip(zipped, params=None):
     return new_params
 
 
+# Turn list of objects with .name attribute into dict
+def name_dict(lst):
+    d = OrderedDict()
+    for obj in lst:
+        d[obj.name] = obj
+    return d
+
+
 # get the list of parameters: Note that tparams must be OrderedDict
 def itemlist(tparams):
     return [vv for kk, vv in six.iteritems(tparams)]
@@ -57,15 +65,29 @@ def init_tparams(params):
 
 
 # load parameters
-def load_params(path, params):
+def load_params(path, params, theano_var=False):
     pp = numpy.load(path)
     for kk, vv in six.iteritems(params):
         if kk not in pp:
             warnings.warn('%s is not in the archive' % kk)
             continue
-        params[kk] = pp[kk]
+        if theano_var:
+            params[kk].set_value(pp[kk])
+        else:
+            params[kk] = pp[kk]
 
     return params
+
+
+def merge_dicts(*dict_args):
+    '''
+    Given any number of dicts, shallow copy and merge into a new dict,
+    precedence goes to key value pairs in latter dicts.
+    '''
+    result = {}
+    for dictionary in dict_args:
+        result.update(dictionary)
+    return result
 
 
 # some utilities

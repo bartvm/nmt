@@ -24,7 +24,7 @@ from data_iterator import UNK_TOKEN, load_data
 from nmt_base import (pred_probs, build_model, save_params,
                       build_sampler, init_params, gen_sample,
                       prepare_validation_timer)
-from utils import (load_params, init_tparams, zipp,
+from utils import (load_params, init_tparams, zipp, name_dict,
                    unzip, itemlist, prepare_character_tensor)
 import optimizers
 
@@ -48,7 +48,7 @@ def train(experiment_id, data_base_path,
           time_limit,
           save_freq,   # save the parameters after every saveFreq updates
           sample_freq,   # generate some samples after every sampleFreq
-          reload_=False):
+          reload_from=None):
 
     start_time = time.time()
 
@@ -70,19 +70,15 @@ def train(experiment_id, data_base_path,
     LOGGER.info('Building model')
     params = init_params(model_options)
     # reload parameters
-    model_filename = '{}.model.npz'.format(experiment_id)
-    temp_model_filename = '{}.model.temp.npz'.format(experiment_id)
+    checkpoint_filename = '{}.checkpoint.npz'.format(experiment_id)
     model_option_filename = '{}.config.json'.format(experiment_id)
-    saveto_filename = '{}.npz'.format(saveto)
-    if reload_ and os.path.exists(saveto_filename):
-        LOGGER.info('Loading parameters from {}'.format(saveto_filename))
-        params = load_params(saveto_filename, params)
+    best_filename = '{}.{}.best.npz'.format(experiment_id, saveto)
+    if reload_from and os.path.exists(reload_from):
+        LOGGER.info('Loading parameters from {}'.format(reload_from))
+        params = load_params(reload_from, params)
 
     LOGGER.info('Initializing parameters')
     tparams = init_tparams(params)
-
-    # hold a copy of parameters being used for validation
-    valid_params = unzip(tparams)
 
     # use_noise is for dropout
     trng, use_noise, encoder_vars, decoder_vars, \
@@ -151,13 +147,39 @@ def train(experiment_id, data_base_path,
 
     # compile the optimizer, the actual computational graph is compiled here
     lr = tensor.scalar(name='lr')
+
     LOGGER.info('Building optimizers')
-    f_grad_shared, f_update = getattr(optimizers, optimizer)(lr, tparams,
-                                                             grads, inps, cost)
+    f_grad_shared, f_update, optimizer_state = \
+        getattr(optimizers, optimizer)(lr, tparams, grads, inps, cost)
+
+    optimizer_state = name_dict(optimizer_state)
+
+    # TODO set_value optimizer_state
+    if reload_from and os.path.exists(reload_from):
+        LOGGER.info('Loading optimizer state from {}'.format(reload_from))
+        optimizer_state = load_params(reload_from, optimizer_state,
+                                      theano_var=True)
 
     LOGGER.info('Optimization')
 
     log = Logger(filename='{}.log.jsonl.gz'.format(experiment_id))
+
+    best_model = None
+    best_score = 0
+    bad_counter = 0
+
+    uidx = 0
+    uidx_restore = [0]
+    estop = False
+    if reload_from and os.path.exists(reload_from):
+        rmodel = numpy.load(reload_from)
+        if 'uidx' in rmodel:
+            uidx_restore = rmodel['uidx']
+
+    # hold a copy of parameters being used for validation
+    valid_params = unzip(tparams)
+    valid_opt_state = unzip(optimizer_state)
+    valid_uidx = [uidx]
 
     # evaluation score will be stored into the following queue
     valid_ret_queue = queue.Queue()
@@ -165,13 +187,16 @@ def train(experiment_id, data_base_path,
 
     rt = None
     if eval_intv > 0:
-        rt = prepare_validation_timer(valid_params, process_queue,
-                                      temp_model_filename,
+        rt = prepare_validation_timer(valid_params, valid_opt_state,
+                                      valid_uidx,
+                                      process_queue,
+                                      checkpoint_filename,
                                       model_option_filename,
                                       eval_intv, valid_ret_queue,
                                       **validation_options)
 
     def cancel_validation_process():
+        # TODO delete the validation model file
         LOGGER.info('Now attempting to stop the timer')
         if rt:
             rt.stop()
@@ -199,18 +224,6 @@ def train(experiment_id, data_base_path,
     signal.signal(signal.SIGINT, _timer_signal_handler)
 
     train_start = time.clock()
-    best_p = None
-    best_at_uidx = 0
-    best_score = 0
-    bad_counter = 0
-
-    uidx = 0
-    uidx_restore = 0
-    estop = False
-    if reload_ and os.path.exists(saveto_filename):
-        rmodel = numpy.load(saveto_filename)
-        if 'uidx' in rmodel:
-            uidx_restore = rmodel['uidx']
 
     try:
         if rt:
@@ -223,7 +236,7 @@ def train(experiment_id, data_base_path,
                 n_samples += len(x)
 
                 uidx += 1
-                if uidx < uidx_restore:
+                if uidx < uidx_restore[0]:
                     continue
 
                 x, x_mask, y, y_mask = x.T, x_mask.T, y.T, y_mask.T
@@ -278,19 +291,25 @@ def train(experiment_id, data_base_path,
                 if numpy.mod(uidx, save_freq) == 0:
                     LOGGER.info('Saving best model so far')
 
-                    if best_p is not None:
+                    if best_model is not None:
+                        best_p, best_state, best_uidx = best_model
                         params = best_p
-                        save_at_uidx = best_at_uidx
+                        opt_state = best_state
+                        save_at_uidx = best_uidx
                     else:
                         params = unzip(tparams)
+                        opt_state = unzip(optimizer_state)
                         save_at_uidx = uidx
 
                     # save params to exp_id.npz and symlink model.npz to it
-                    save_params(params, save_at_uidx, model_filename,
-                                saveto_filename)
+                    params_and_state = merge(params, opt_state,
+                                             {'uidx': save_at_uidx})
+                    save_params(params_and_state, best_filename)
 
                     # update validation parameter
                     valid_params = unzip(tparams, valid_params)
+                    valid_opt_state = unzip(optimizer_state, valid_opt_state)
+                    valid_uidx[0] = uidx
 
                 # generate some samples with the model and display them
                 if sample_freq > 0 and numpy.mod(uidx, sample_freq) == 0:
@@ -493,16 +512,15 @@ def train(experiment_id, data_base_path,
 
                         raise valid_ret[0]
                     else:
-                        assert len(valid_ret)
+                        assert len(valid_ret) == 2
                         ret_model, scores = valid_ret
 
                     valid_bleu = scores[0]
                     log_entry['validation_bleu'] = valid_bleu
 
                     if valid_bleu > best_score:
-                        best_p = ret_model
+                        best_model = ret_model
                         best_score = valid_bleu
-                        best_at_uidx = uidx
                         bad_counter = 0
                     else:
                         bad_counter += 1
@@ -535,8 +553,11 @@ def train(experiment_id, data_base_path,
                 log.log(log_entry)
                 break
 
-        if best_p is not None:
+        if best_model is not None:
+            assert len(best_model) == 3
+            best_p, best_state, best_uidx = best_model
             zipp(best_p, tparams)
+            zipp(best_state, optimizer_state)
 
         use_noise.set_value(0.)
         LOGGER.info('Calculating validation cost')
@@ -550,11 +571,17 @@ def train(experiment_id, data_base_path,
 
         total_valid_err = numpy.sum(valid_errs)
 
-        if not best_p:
+        if not best_model:
             best_p = unzip(tparams)
+            best_state = unzip(optimizer_state)
+            best_uidx = uidx
 
-        params = copy.copy(best_p)
-        save_params(params, uidx, model_filename, saveto_filename)
+        best_p = copy.copy(best_p)
+        best_state = copy.copy(best_state)
+        params_and_state = merge(best_p,
+                                 best_state,
+                                 {'uidx': best_uidx})
+        save_params(params_and_state, best_filename)
 
     except Exception:
         LOGGER.error(traceback.format_exc())

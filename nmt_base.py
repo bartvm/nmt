@@ -9,6 +9,7 @@ import logging
 import os
 from collections import OrderedDict
 
+from toolz.dicttoolz import merge
 import numpy
 import theano
 from six.moves import xrange
@@ -23,11 +24,13 @@ from layers import get_layer
 LOGGER = logging.getLogger(__name__)
 
 
-def validation(model, process_queue, translator_cmd, evaluator_cmd,
+def validation(params, opt_state, uidx, process_queue,
+               translator_cmd, evaluator_cmd,
                model_filename, trans_valid_src):
 
     # We need to make sure that the model remains unchanged during evaluation
-    save_params(model, -1, model_filename)
+    params_and_state = merge(params, opt_state, {'uidx': uidx})
+    save_params(params_and_state, model_filename)
 
     # Translation runs on CPUs with BLAS
     env_THEANO_FLAGS = \
@@ -91,10 +94,13 @@ def validation(model, process_queue, translator_cmd, evaluator_cmd,
     while not process_queue.empty():
         process_queue.get()
 
+    model = [params, opt_state, uidx]
     return (model, evaluation_score)
 
 
-def prepare_validation_timer(model,
+def prepare_validation_timer(params,
+                             opt_state,
+                             uidx,
                              process_queue,
                              model_filename,
                              model_option_filename,
@@ -135,7 +141,7 @@ def prepare_validation_timer(model,
         valid_trg,
     ]
 
-    args = [model, process_queue]
+    args = [params, opt_state, uidx, process_queue]
     kwargs = {'translator_cmd': translator_cmd,
               'evaluator_cmd': evaluator_cmd,
               'model_filename': model_filename,
@@ -1606,14 +1612,14 @@ def pred_probs(f_log_probs, options, stream):
     return numpy.array(probs)
 
 
-def save_params(params, uidx, filename, symlink=None):
+def save_params(params, filename, symlink=None):
     """Save the parameters.
 
     Saves the parameters as an ``.npz`` file. It optionally also creates a
     symlink to this archive.
 
     """
-    numpy.savez(filename, uidx=uidx, **params)
+    numpy.savez(filename, **params)
     if symlink:
         if os.path.lexists(symlink):
             os.remove(symlink)

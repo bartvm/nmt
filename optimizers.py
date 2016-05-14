@@ -8,7 +8,8 @@ from utils import itemlist
 
 
 # optimizers
-# name(hyperp, tparams, grads, inputs (list), cost) = f_grad_shared, f_update
+# name(hyperp, tparams, grads, inputs (list), cost) = \
+#       f_grad_shared, f_update
 def adam(lr, tparams, grads, inp, cost):
     gshared = [theano.shared(p.get_value() * 0.,
                              name='%s_grad' % k)
@@ -24,15 +25,18 @@ def adam(lr, tparams, grads, inp, cost):
 
     updates = []
 
-    i = theano.shared(np.float32(0.))
+    i = theano.shared(np.float32(0.), name='adam_i')
     i_t = i + 1.
     fix1 = 1. - b1 ** (i_t)
     fix2 = 1. - b2 ** (i_t)
     lr_t = lr0 * (tensor.sqrt(fix2) / fix1)
 
+    state = [i]
+
     for p, g in zip(tparams.values(), gshared):
-        m = theano.shared(p.get_value() * 0.)
-        v = theano.shared(p.get_value() * 0.)
+        m = theano.shared(p.get_value() * 0., name='%s_m' % p.name)
+        v = theano.shared(p.get_value() * 0., name='%s_v' % p.name)
+        state.extend([m, v])
         m_t = (b1 * g) + ((1. - b1) * m)
         v_t = (b2 * tensor.sqr(g)) + ((1. - b2) * v)
         g_t = m_t / (tensor.sqrt(v_t) + e)
@@ -47,7 +51,7 @@ def adam(lr, tparams, grads, inp, cost):
                                updates=updates,
                                on_unused_input='ignore')
 
-    return f_grad_shared, f_update
+    return f_grad_shared, f_update, state
 
 
 def adadelta(lr, tparams, grads, inp, cost):
@@ -82,7 +86,7 @@ def adadelta(lr, tparams, grads, inp, cost):
                                updates=ru2up + param_up,
                                on_unused_input='ignore')
 
-    return f_grad_shared, f_update
+    return f_grad_shared, f_update, running_up2 + running_grads2
 
 
 def rmsprop(lr, tparams, grads, inp, cost):
@@ -119,17 +123,17 @@ def rmsprop(lr, tparams, grads, inp, cost):
                                updates=updir_new + param_up,
                                on_unused_input='ignore')
 
-    return f_grad_shared, f_update
+    return f_grad_shared, f_update, running_grads + running_grads2 + updir
 
 
-def sgd(lr, tparams, grads, x, mask, y, cost):
+def sgd(lr, tparams, grads, inp, cost):
     gshared = [theano.shared(p.get_value() * 0.,
                              name='%s_grad' % k)
                for k, p in six.iteritems(tparams)]
     gsup = [(gs, g) for gs, g in zip(gshared, grads)]
 
     f_grad_shared = theano.function(
-        [x, mask, y],
+        inp,
         cost,
         updates=gsup,
         name='sgd')
@@ -137,4 +141,4 @@ def sgd(lr, tparams, grads, x, mask, y, cost):
     pup = [(p, p - lr * g) for p, g in zip(itemlist(tparams), gshared)]
     f_update = theano.function([lr], [], updates=pup)
 
-    return f_grad_shared, f_update
+    return f_grad_shared, f_update, []
