@@ -7,7 +7,7 @@
     "patience": 10,
     "finish_after": 10000000,
     "lrate": 0.0001,
-    "max_epochs": 5
+    "max_epochs": 7
   },
   "multi": {
     "valid_sync": true,
@@ -18,13 +18,12 @@
     "log_port": 5569
   },
   "management": {
-    "sample_freq": 1000,
-    "valid_freq": 1000,
+    "sample_freq": 5000,
+    "valid_freq": 5000,
     "eval_intv": 180,
-    "time_limit": 2880,
+    "time_limit": 1340,
     "saveto": "model",
-    "reload_": false,
-    "save_freq": 5000
+    "save_freq": 1000
   },
   "validation": {
     "translator": "translate.py",
@@ -40,15 +39,15 @@
     "trans_valid_src": "data/newstest2013.norm.tok.en.translated"
   },
   "data": {
-    "src": "data/nmt/train/wmt16.de-en.rmnpc.no_unipunc.norm.tok.clean.shuf.removed.en",
-    "trg": "data/nmt/train/wmt16.de-en.rmnpc.no_unipunc.norm.tok.clean.shuf.removed.de",
+    "src": "data/nmt/train/wmt16.de-en.rmnpc.no_unipunc.norm.tok.clean.shuf.en",
+    "trg": "data/nmt/train/wmt16.de-en.rmnpc.no_unipunc.norm.tok.clean.shuf.de",
     "src_char_vocab": "data/nmt/vocab/wmt16.de-en.char_vocab.en",
     "src_word_vocab": "data/nmt/vocab/wmt16.de-en.vocab.en",
     "trg_char_vocab": "data/nmt/vocab/wmt16.de-en.char_vocab.de",
     "trg_word_vocab": "data/nmt/vocab/wmt16.de-en.vocab.de",
     "valid_src": "data/nmt/dev/newstest2013.norm.tok.en",
     "valid_trg": "data/nmt/dev/newstest2013.norm.tok.de",
-    "batch_size": 80,
+    "batch_size": 64,
     "valid_batch_size": 32,
     "n_chars_src": 200,
     "n_chars_trg": 200,
@@ -56,11 +55,12 @@
     "n_words_trg": 50000,
     "max_src_word_length": 50,
     "max_trg_word_length": 50,
-    "max_src_char_length": 250,
-    "max_trg_char_length": 250
+    "max_src_char_length": 300,
+    "max_trg_char_length": 300,
+    "max_unk_ratio": 0.3
   },
   "model": {
-    "dim": 1024,
+    "dim": 640,
     "use_dropout": false,
     "use_character": true,
     "unk_gate": true,

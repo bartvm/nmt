@@ -81,7 +81,8 @@ def get_stream(source, target, source_char_dict, source_word_dict,
                buffer_multiplier=100, n_chars_source=0, n_words_source=0,
                n_chars_target=0, n_words_target=0,
                max_src_word_length=None, max_trg_word_length=None,
-               max_src_char_length=None, max_trg_char_length=None):
+               max_src_char_length=None, max_trg_char_length=None,
+               max_unk_ratio=None):
     """Returns a stream over sentence pairs.
 
     Parameters
@@ -154,7 +155,14 @@ def get_stream(source, target, source_char_dict, source_word_dict,
             trg_char_ok = (not max_trg_char_length) or \
                 len(trg_chars) < (max_trg_char_length + max_trg_word_length)
 
-            return src_word_ok and trg_word_ok and src_char_ok and trg_char_ok
+            src_word_unk_ok = (not max_unk_ratio) or \
+                src_words.count(1)/float(len(src_words)) < max_unk_ratio
+            trg_word_unk_ok = (not max_unk_ratio) or \
+                trg_words.count(1)/float(len(trg_words)) < max_unk_ratio
+
+            return src_word_ok and trg_word_ok and \
+                src_char_ok and trg_char_ok and \
+                src_word_unk_ok and trg_word_unk_ok
 
         merged = Filter(merged, filter_pair)
 
@@ -180,7 +188,8 @@ def load_data(src, trg,
               n_chars_trg, n_words_trg,
               batch_size, valid_batch_size,
               max_src_word_length, max_trg_word_length,
-              max_src_char_length, max_trg_char_length):
+              max_src_char_length, max_trg_char_length,
+              max_unk_ratio):
     LOGGER.info('Loading data')
 
     dictionaries = [src_char_vocab, src_word_vocab,
@@ -211,7 +220,8 @@ def load_data(src, trg,
                               max_src_word_length=max_src_word_length,
                               max_trg_word_length=max_trg_word_length,
                               max_src_char_length=max_src_char_length,
-                              max_trg_char_length=max_trg_char_length)
+                              max_trg_char_length=max_trg_char_length,
+                              max_unk_ratio=max_unk_ratio)
     valid_stream = get_stream([valid_datasets[0]],
                               [valid_datasets[1]],
                               dictionaries[0],
