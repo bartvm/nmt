@@ -1105,11 +1105,11 @@ def build_sampler(tparams, options, trng):
         else:
             trg_inp = concatenate([wemb_trg, cproj_comb_trg],
                                   axis=wemb_trg.ndim-1)
-            trg_gates = tensor.alloc(1., 1, 1)
+            trg_gates = tensor.alloc(1., y.shape[0])
 
     else:
         trg_inp = wemb_trg
-        trg_gates = tensor.alloc(1., 1, 1)
+        trg_gates = tensor.alloc(1., y.shape[0])
 
     # if it's the first word, emb should be all zero and it is indicated by -1
     trg_inp = trg_inp * (y[:, None] >= 0)
