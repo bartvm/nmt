@@ -247,20 +247,8 @@ def train(experiment_id, data_base_path,
                     xc, xc_mask = prepare_character_tensor(xc)
                     yc, yc_mask = prepare_character_tensor(yc)
 
-                    xc_in = xc.reshape([xc.shape[0], -1])
-                    xc_in_mask = xc_mask.reshape([xc_mask.shape[0], -1])
-
-                    xc_in = xc_in[:, x_mask.flatten() > 0]
-                    xc_in_mask = xc_in_mask[:, x_mask.flatten() > 0]
-
-                    yc_in = yc.reshape([yc.shape[0], -1])
-                    yc_in_mask = yc_mask.reshape([yc_mask.shape[0], -1])
-
-                    yc_in = yc_in[:, y_mask.flatten() > 0]
-                    yc_in_mask = yc_in_mask[:, y_mask.flatten() > 0]
-
-                    encoder_inps += [xc_in, xc_in_mask]
-                    decoder_inps += [yc_in, yc_in_mask]
+                    encoder_inps += [xc, xc_mask]
+                    decoder_inps += [yc, yc_mask]
 
                 inps = encoder_inps + decoder_inps
 

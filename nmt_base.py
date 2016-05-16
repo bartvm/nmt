@@ -421,13 +421,13 @@ def build_model(tparams, options):
                                    options['dim_word_src']])
 
     if options['use_character']:
-        xc = tensor.matrix('xc', dtype='int64')
-        xc_mask = tensor.matrix('xc_mask', dtype='float32')
+        xc = tensor.tensor3('xc', dtype='int64')
+        xc_mask = tensor.tensor3('xc_mask', dtype='float32')
         xcr = xc[::-1]  # reverse characters; word order is intact
         xcr_mask = xc_mask[::-1]
 
         n_chars_src = xc.shape[0]
-        n_nz_words_src = xc.shape[1]
+        n_words_src = xc.shape[1]
 
         encoder_vars += [xc, xc_mask]
 
@@ -436,7 +436,8 @@ def build_model(tparams, options):
         cemb_src = cemb_src.reshape(
             [
                 n_chars_src,
-                n_nz_words_src,
+                n_words_src,
+                n_samples,
                 options['dim_char_src']
             ]
         )
@@ -453,7 +454,8 @@ def build_model(tparams, options):
         cembr_src = cembr_src.reshape(
             [
                 n_chars_src,
-                n_nz_words_src,
+                n_words_src,
+                n_samples,
                 options['dim_char_src']
             ]
         )
@@ -467,44 +469,6 @@ def build_model(tparams, options):
                                      axis=cproj_src[0].ndim-2)
         # word representations from characters in a reverse order
         cprojr_comb_src = cproj_comb_src[::-1]
-
-        # fill the reduced set of word embeddings into
-        # a 3D tensor of the same size with word embeddings
-        cemb_src_dim = cproj_comb_src.shape[1]
-
-        nz_word_src_inds = x_mask.flatten().nonzero()
-        tmp_cproj_comb_src = tensor.alloc(
-            0.,
-            n_words_src * n_samples, cemb_src_dim)
-
-        tmp_cproj_comb_src = tensor.set_subtensor(
-            tmp_cproj_comb_src[nz_word_src_inds],
-            cproj_comb_src)
-
-        cproj_comb_src = tmp_cproj_comb_src.reshape(
-            [
-                n_words_src,
-                n_samples,
-                cemb_src_dim
-            ]
-        )
-
-        nz_wordr_src_inds = xr_mask.flatten().nonzero()
-        tmp_cprojr_comb_src = tensor.alloc(
-            0.,
-            n_words_src * n_samples, cemb_src_dim)
-
-        tmp_cprojr_comb_src = tensor.set_subtensor(
-            tmp_cprojr_comb_src[nz_wordr_src_inds],
-            cprojr_comb_src)
-
-        cprojr_comb_src = tmp_cprojr_comb_src.reshape(
-            [
-                n_words_src,
-                n_samples,
-                cemb_src_dim
-            ]
-        )
 
         if options['unk_gate']:
             # allows the model to determine importance of word embeddings
@@ -594,24 +558,25 @@ def build_model(tparams, options):
                                 options['dim_word_trg']])
 
     if options['use_character']:
-        yc_in = tensor.matrix('yc_in', dtype='int64')
-        yc_in_mask = tensor.matrix('yc_in_mask', dtype='float32')
+        yc = tensor.tensor3('yc', dtype='int64')
+        yc_mask = tensor.tensor3('yc_mask', dtype='float32')
 
-        ycr_in = yc_in[::-1]
-        ycr_in_mask = yc_in_mask[::-1]
+        ycr = yc[::-1]
+        ycr_mask = yc_mask[::-1]
 
-        n_nz_words_trg = yc_in.shape[1]
-        n_chars_trg = yc_in.shape[0]
+        n_chars_trg = yc.shape[0]
+        n_words_trg = yc.shape[1]
 
         # decoder_vars += [yc_in, yc_in_mask, yc, yc_mask]
-        decoder_vars += [yc_in, yc_in_mask]
+        decoder_vars += [yc, yc_mask]
 
         # character embedding in the target language
-        cemb_trg = tparams['Cemb_dec'][yc_in.flatten()]
+        cemb_trg = tparams['Cemb_dec'][yc.flatten()]
         cemb_trg = cemb_trg.reshape(
             [
                 n_chars_trg,
-                n_nz_words_trg,
+                n_words_trg,
+                n_samples,
                 options['dim_char_trg']
             ]
         )
@@ -621,14 +586,15 @@ def build_model(tparams, options):
                                                      cemb_trg,
                                                      options,
                                                      prefix='char_enc_trg',
-                                                     mask=yc_in_mask)
+                                                     mask=yc_mask)
 
         # repeat for the reverse characters
-        cembr_trg = tparams['Cemb_dec'][ycr_in.flatten()]
+        cembr_trg = tparams['Cemb_dec'][ycr.flatten()]
         cembr_trg = cembr_trg.reshape(
             [
                 n_chars_trg,
-                n_nz_words_trg,
+                n_words_trg,
+                n_samples,
                 options['dim_char_trg']
             ]
         )
@@ -638,28 +604,11 @@ def build_model(tparams, options):
                                                       cembr_trg,
                                                       options,
                                                       prefix='char_enc_trg_r',
-                                                      mask=ycr_in_mask)
+                                                      mask=ycr_mask)
 
         # pick the last state to represent words in the forward chain of words
         cproj_comb_trg = concatenate([cproj_trg[0][-1], cprojr_trg[0][-1]],
                                      axis=cproj_trg[0].ndim-2)
-
-        cemb_trg_dim = cproj_comb_trg.shape[1]
-        nz_word_trg_inds = y_mask.flatten().nonzero()
-        new_cproj_comb_trg = tensor.alloc(
-            0.,
-            n_words_trg * n_samples, cemb_trg_dim)
-
-        new_cproj_comb_trg = tensor.set_subtensor(
-            new_cproj_comb_trg[nz_word_trg_inds],
-            cproj_comb_trg)
-        cproj_comb_trg = new_cproj_comb_trg.reshape(
-            [
-                n_words_trg,
-                n_samples,
-                cemb_trg_dim
-            ]
-        )
 
         if options['unk_gate']:
             word_gate_trg = get_layer('ff')[1](tparams, wemb_trg, options,
@@ -801,18 +750,12 @@ def build_model(tparams, options):
             init_char_dec_next_word
         )
 
-        nz_words_trg_inds = y_mask.flatten().nonzero()
-        n_nz_words_trg = yc_in.shape[1]
-
-        tmp_init_char_dec_state = init_char_dec_state.reshape(
-            [n_words_trg * n_samples, options['char_hid']])
-        init_char_dec_state = tmp_init_char_dec_state[nz_words_trg_inds]
-
-        char_dec_emb = tparams['Cemb_dec'][yc_in.flatten()]
+        char_dec_emb = tparams['Cemb_dec'][yc.flatten()]
         char_dec_emb = char_dec_emb.reshape(
             [
                 n_chars_trg,
-                n_nz_words_trg,
+                n_words_trg,
+                n_samples,
                 options['dim_char_trg']
             ]
         )
@@ -827,20 +770,20 @@ def build_model(tparams, options):
                                           char_dec_emb,
                                           options,
                                           prefix='char_decoder',
-                                          mask=yc_in_mask,
+                                          mask=yc_mask,
                                           init_state=init_char_dec_state)
-        # proj_char_h: (# chars x # nonzero words x char hid dim)
+        # proj_char_h: (# chars x # words x # samples x char hid dim)
         proj_char_h = proj_char_h[0]
 
         # from hidden of character at i of word at t to character t,i
-        # char_logit_lstm: (# chars x # nonzero words x trg char dim)
+        # char_logit_lstm: (# chars x # words x # samples x trg char dim)
         char_logit_lstm = get_layer('ff')[1](tparams,
                                              proj_char_h,
                                              options,
                                              prefix='ff_char_logit_lstm',
                                              activ=None)
         # from character t,(i-1) to character t,i
-        # char_logit_prev: (# chars x # nonzero words x trg char dim)
+        # char_logit_prev: (# chars x # words x # samples x trg char dim)
         char_logit_prev = get_layer('ff')[1](tparams,
                                              char_dec_emb,
                                              options,
@@ -862,31 +805,21 @@ def build_model(tparams, options):
         char_logit_shp = char_logit.shape
         char_probs = tensor.nnet.softmax(char_logit.reshape(
             [
-                char_logit_shp[0] * char_logit_shp[1],
-                char_logit_shp[2]
+                char_logit_shp[0] * char_logit_shp[1] * char_logit_shp[2],
+                char_logit_shp[3]
             ]
         ))
 
         # compute character cost
-        yc_in_flat = yc_in.flatten()
-        yc_in_shp = yc_in.shape
-        yc_in_flat_idx = tensor.arange(yc_in_flat.shape[0]) * options['n_chars_trg'] + \
-            yc_in_flat
-        char_cost = -tensor.log(char_probs.flatten()[yc_in_flat_idx])
-        char_cost = char_cost.reshape([yc_in_shp[0], yc_in_shp[1]])
+        yc_flat = yc.flatten()
+        yc_shp = yc.shape
+        yc_flat_idx = tensor.arange(yc_flat.shape[0]) * options['n_chars_trg'] + \
+            yc_flat
+        char_cost = -tensor.log(char_probs.flatten()[yc_flat_idx])
+        char_cost = char_cost.reshape([yc_shp[0], yc_shp[1], yc_shp[2]])
 
         # sum of losses over characters in a word
-        char_cost = (char_cost * yc_in_mask).sum(0)
-
-        char_cost_orig = tensor.alloc(
-            0.,
-            n_words_trg * n_samples)
-
-        char_cost_orig = tensor.set_subtensor(
-            char_cost_orig[nz_words_trg_inds],
-            char_cost)
-        char_cost = char_cost_orig.reshape(
-            [n_words_trg, n_samples])
+        char_cost = (char_cost * yc_mask).sum(0)
 
         # summing losses over all words in a sentence
         char_cost = char_cost.sum(0)
@@ -1584,20 +1517,8 @@ def pred_probs(f_log_probs, options, stream):
             xc, xc_mask = prepare_character_tensor(xc)
             yc, yc_mask = prepare_character_tensor(yc)
 
-            xc_in = xc.reshape([xc.shape[0], -1])
-            xc_in_mask = xc_mask.reshape([xc_mask.shape[0], -1])
-
-            xc_in = xc_in[:, x_mask.flatten() > 0]
-            xc_in_mask = xc_in_mask[:, x_mask.flatten() > 0]
-
-            yc_in = yc.reshape([yc.shape[0], -1])
-            yc_in_mask = yc_mask.reshape([yc_mask.shape[0], -1])
-
-            yc_in = yc_in[:, y_mask.flatten() > 0]
-            yc_in_mask = yc_in_mask[:, y_mask.flatten() > 0]
-
-            encoder_inps += [xc_in, xc_in_mask]
-            decoder_inps += [yc_in, yc_in_mask]
+            encoder_inps += [xc, xc_mask]
+            decoder_inps += [yc, yc_mask]
 
         inps = encoder_inps + decoder_inps
 
