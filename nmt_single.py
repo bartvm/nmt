@@ -345,9 +345,10 @@ def train(experiment_id, data_base_path,
                         if model_options['use_character'] and \
                            model_options['unk_gate']:
                             word_src_gates = word_solutions['word_src_gates']
+                            num_src_words = int(x_mask[:, jj].sum())
                             log_entry['samples'][-1]['word_gates_src'] = \
                                 numpy.array2string(
-                                    word_src_gates[:x_mask[:, jj].sum(), :].T,
+                                    word_src_gates[:num_src_words, :].T,
                                     precision=2, max_line_width=500,
                                     suppress_small=True)
 
@@ -366,7 +367,7 @@ def train(experiment_id, data_base_path,
                             log_entry['samples'][-1]['weights'] = \
                                 numpy.array2string(
                                     word_weights.squeeze()[
-                                        :x_mask[:, jj].sum()],
+                                        :num_src_words],
                                     precision=3, max_line_width=500,
                                     suppress_small=True)
 
@@ -397,9 +398,9 @@ def train(experiment_id, data_base_path,
                             assert tidx >= 0 and tidx < len(word_alignment), \
                                 '%d\t%d' % (tidx, len(word_alignment))
 
-                            num_src_words = x_mask[:, jj].sum()-1
                             align_src_word_idx = \
-                                (word_alignment[tidx][:num_src_words]).argmax()
+                                (word_alignment[tidx][
+                                    :num_src_words-1]).argmax()
                             if token == UNK_TOKEN:
                                 aligned_token = '%s_<%d>' % \
                                     (worddicts_r[1][x[align_src_word_idx, jj]],
