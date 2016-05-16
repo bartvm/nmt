@@ -287,7 +287,7 @@ def train(experiment_id, data_base_path,
                     else:
                         params = unzip(tparams)
                         opt_state = unzip(optimizer_state)
-                        save_at_uidx = uidx
+                        save_at_uidx = [uidx]
 
                     # save params to exp_id.npz and symlink model.npz to it
                     params_and_state = merge(params, opt_state,
@@ -562,7 +562,7 @@ def train(experiment_id, data_base_path,
         if not best_model:
             best_p = unzip(tparams)
             best_state = unzip(optimizer_state)
-            best_uidx = uidx
+            best_uidx = [uidx]
 
         best_p = copy.copy(best_p)
         best_state = copy.copy(best_state)
