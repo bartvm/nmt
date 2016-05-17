@@ -2,7 +2,7 @@
   "training": {
     "optimizer": "adadelta",
     "alpha_c": 0,
-    "clip_c": 5,
+    "clip_c": 10,
     "decay_c": 0,
     "patience": 10,
     "finish_after": 10000000,
@@ -28,7 +28,7 @@
   "validation": {
     "translator": "translate.py",
     "evaluator": "multi-bleu.perl",
-    "nproc": 7,
+    "nproc": 10,
     "beam_size": 10,
     "src_char_vocab": "data/nmt/vocab/wmt16.de-en.char_vocab.en",
     "src_word_vocab": "data/nmt/vocab/wmt16.de-en.vocab.en",
@@ -47,7 +47,7 @@
     "trg_word_vocab": "data/nmt/vocab/wmt16.de-en.vocab.de",
     "valid_src": "data/nmt/dev/newstest2013.norm.tok.en",
     "valid_trg": "data/nmt/dev/newstest2013.norm.tok.de",
-    "batch_size": 64,
+    "batch_size": 32,
     "valid_batch_size": 32,
     "n_chars_src": 200,
     "n_chars_trg": 200,
@@ -57,10 +57,10 @@
     "max_trg_word_length": 50,
     "max_src_char_length": 300,
     "max_trg_char_length": 300,
-    "max_unk_ratio": 0.3
+    "max_unk_ratio": 0.8
   },
   "model": {
-    "dim": 640,
+    "dim": 1024,
     "use_dropout": false,
     "use_character": true,
     "unk_gate": true,
@@ -71,8 +71,8 @@
     "n_chars_trg": 200,
     "n_words_src": 50000,
     "n_words_trg": 50000,
-    "dim_char_src": 32,
-    "dim_char_trg": 32,
+    "dim_char_src": 64,
+    "dim_char_trg": 64,
     "char_hid": 256,
     "dim_word_src": 512,
     "dim_word_trg": 512 
