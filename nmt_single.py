@@ -494,28 +494,34 @@ def train(experiment_id, data_base_path,
 
                     valid_ret = valid_ret_queue.get()
                     if len(valid_ret) == 1:
-                        cancel_validation_process()
 
                         while not valid_ret_queue.empty():
                             valid_ret_queue.get()
 
-                        raise valid_ret[0]
+                        received_exception = valid_ret[0]
+                        if isinstance(received_exception, ImportError):
+                            LOGGER.warn(
+                                'The following error has been ignored:\n%s'
+                                % received_exception)
+                        else:
+                            cancel_validation_process()
+                            raise received_exception
                     else:
                         assert len(valid_ret) == 2
                         ret_model, scores = valid_ret
 
-                    valid_bleu = scores[0]
-                    log_entry['validation_bleu'] = valid_bleu
+                        valid_bleu = scores[0]
+                        log_entry['validation_bleu'] = valid_bleu
 
-                    if valid_bleu > best_score:
-                        best_model = ret_model
-                        best_score = valid_bleu
-                        bad_counter = 0
-                    else:
-                        bad_counter += 1
-                        if bad_counter > patience:
-                            estop = True
-                            break
+                        if valid_bleu > best_score:
+                            best_model = ret_model
+                            best_score = valid_bleu
+                            bad_counter = 0
+                        else:
+                            bad_counter += 1
+                            if bad_counter > patience:
+                                estop = True
+                                break
 
                 # finish after this many updates
                 if uidx >= finish_after:

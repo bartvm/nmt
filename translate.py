@@ -7,16 +7,21 @@ import argparse
 import signal
 import sys
 import traceback
-import numpy
 import io
 import json
 from multiprocessing import Process, Queue, Event
 
-from six.moves import xrange
+try:
+    import numpy
+    from six.moves import xrange
 
-from data_iterator import (load_dict, EOW_TOKEN, EOS_TOKEN, UNK_TOKEN)
-from nmt_base import (build_sampler, gen_sample, init_params)
-from utils import (load_params, init_tparams, prepare_character_tensor)
+    from data_iterator import (load_dict, EOW_TOKEN, EOS_TOKEN, UNK_TOKEN)
+    from nmt_base import (build_sampler, gen_sample, init_params)
+    from utils import (load_params, init_tparams, prepare_character_tensor)
+except ImportError as e:
+    EXIT_STATUS = 64
+    print('Failed to import: %s' % str(e), file=sys.stderr)
+    sys.exit(EXIT_STATUS)
 
 
 # utility function

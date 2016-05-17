@@ -54,6 +54,8 @@ def validation(params, opt_state, uidx, process_queue,
 
     if trans_proc.returncode == 1:
         raise RuntimeError("%s\nFailed to translate sentences" % error_msg)
+    elif trans_proc.returncode == 64:   # Python ImportError
+        raise ImportError(error_msg)
 
     try:
         with io.open(trans_valid_src, 'r', encoding='utf-8') as trans_result_f:

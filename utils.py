@@ -182,10 +182,8 @@ class RepeatedTimer(object):
             self._is_func_running = True
             try:
                 ret = self.function(*self.args, **self.kwargs)
-            except RuntimeError as err:
-                # stop the timer
-                self.stop()
-                ret = [Exception(err)]
+            except Exception as err:
+                ret = [err]
             finally:
                 self._ret_queue.put(ret)
                 self._is_func_running = False
