@@ -1,3 +1,4 @@
+import argparse
 import binascii
 import copy
 import io
@@ -5,7 +6,6 @@ import json
 import logging
 import os
 import shutil
-import sys
 import time
 import signal
 import Queue as queue
@@ -48,6 +48,7 @@ def train(experiment_id, data_base_path,
           time_limit,
           save_freq,   # save the parameters after every saveFreq updates
           sample_freq,   # generate some samples after every sampleFreq
+          verbose,
           reload_from=None):
 
     start_time = time.time()
@@ -261,13 +262,14 @@ def train(experiment_id, data_base_path,
                 cost = f_grad_shared(*inps)
                 f_update(lrate)
 
-                log_entry['cost'] = float(cost)
-                log_entry['average_source_length'] = \
-                    float(x_mask.sum(0).mean())
-                log_entry['average_target_length'] = \
-                    float(y_mask.sum(0).mean())
-                log_entry['update_time'] = time.clock() - update_start
-                log_entry['train_time'] = time.clock() - train_start
+                if verbose:
+                    log_entry['cost'] = float(cost)
+                    log_entry['average_source_length'] = \
+                        float(x_mask.sum(0).mean())
+                    log_entry['average_target_length'] = \
+                        float(y_mask.sum(0).mean())
+                    log_entry['update_time'] = time.clock() - update_start
+                    log_entry['train_time'] = time.clock() - train_start
 
                 # check for bad numbers, usually we remove non-finite elements
                 # and continue training - but not done here
@@ -294,6 +296,7 @@ def train(experiment_id, data_base_path,
                                              {'uidx': save_at_uidx})
                     save_params(params_and_state, best_filename)
 
+                if numpy.mod(uidx, 1000) == 0:
                     # update validation parameter
                     valid_params = unzip(tparams, valid_params)
                     valid_opt_state = unzip(optimizer_state, valid_opt_state)
@@ -540,7 +543,8 @@ def train(experiment_id, data_base_path,
 
                     break
 
-                log.log(log_entry)
+                if verbose and len(log_entry) > 2:
+                    log.log(log_entry)
 
             LOGGER.info('Completed epoch, seen {} samples'.format(n_samples))
 
@@ -592,17 +596,28 @@ def train(experiment_id, data_base_path,
     return total_valid_err
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', type=str, required=True)
+    parser.add_argument('--base_datapath', type=str)
+    parser.add_argument('--experiment_id', type=str)
+
+    args = parser.parse_args()
+
     # Load the configuration file
-    with io.open(sys.argv[1]) as f:
+    with io.open(args.config) as f:
         config = json.load(f)
-    if len(sys.argv) == 3:
-        data_base_path = os.path.realpath(sys.argv[2])
+    if args.base_datapath:
+        data_base_path = os.path.realpath(args.base_datapath)
     else:
         data_base_path = os.getcwd()
 
     # Create unique experiment ID and backup config file
-    experiment_id = binascii.hexlify(os.urandom(3)).decode()
-    shutil.copyfile(sys.argv[1], '{}.config.json'.format(experiment_id))
+    if args.experiment_id:
+        experiment_id = args.experiment_id
+    else:
+        experiment_id = binascii.hexlify(os.urandom(3)).decode()
+
+    shutil.copyfile(args.config, '{}.config.json'.format(experiment_id))
     train(experiment_id, data_base_path, config['model'], config['data'],
           config['validation'],
           **merge(config['training'], config['management']))

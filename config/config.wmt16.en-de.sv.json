@@ -2,7 +2,7 @@
   "training": {
     "optimizer": "adadelta",
     "alpha_c": 0,
-    "clip_c": 10,
+    "clip_c": 5,
     "decay_c": 0,
     "patience": 10,
     "finish_after": 10000000,
@@ -23,7 +23,8 @@
     "eval_intv": 180,
     "time_limit": 1340,
     "saveto": "model",
-    "save_freq": 1000
+    "save_freq": 1000,
+    "verbose": true
   },
   "validation": {
     "translator": "translate.py",
@@ -49,15 +50,15 @@
     "valid_trg": "data/nmt/dev/newstest2013.norm.tok.de",
     "batch_size": 32,
     "valid_batch_size": 32,
-    "n_chars_src": 200,
-    "n_chars_trg": 200,
-    "n_words_src": 50000,
-    "n_words_trg": 50000,
+    "n_chars_src": 300,
+    "n_chars_trg": 300,
+    "n_words_src": 10000,
+    "n_words_trg": 10000,
     "max_src_word_length": 50,
     "max_trg_word_length": 50,
     "max_src_char_length": 300,
     "max_trg_char_length": 300,
-    "max_unk_ratio": 0.8
+    "max_unk_ratio": 1
   },
   "model": {
     "dim": 1024,
@@ -67,12 +68,12 @@
     "encoder": "gru",
     "decoder": "gru_cond",
     "init_decoder": "last",
-    "n_chars_src": 200,
-    "n_chars_trg": 200,
-    "n_words_src": 50000,
-    "n_words_trg": 50000,
-    "dim_char_src": 64,
-    "dim_char_trg": 64,
+    "n_chars_src": 300,
+    "n_chars_trg": 300,
+    "n_words_src": 10000,
+    "n_words_trg": 10000,
+    "dim_char_src": 32,
+    "dim_char_trg": 32,
     "char_hid": 256,
     "dim_word_src": 512,
     "dim_word_trg": 512 

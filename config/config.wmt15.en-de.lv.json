@@ -1,0 +1,81 @@
+{
+  "training": {
+    "optimizer": "adadelta",
+    "alpha_c": 0,
+    "clip_c": 10,
+    "decay_c": 0,
+    "patience": 10,
+    "finish_after": 10000000,
+    "lrate": 0.0001,
+    "max_epochs": 7
+  },
+  "multi": {
+    "valid_sync": true,
+    "train_len": 32,
+    "control_port": 5567,
+    "batch_port": 5568,
+    "beta": 0.9,
+    "log_port": 5569
+  },
+  "management": {
+    "sample_freq": 5000,
+    "valid_freq": 5000,
+    "eval_intv": 180,
+    "time_limit": 1340,
+    "saveto": "model",
+    "save_freq": 1000,
+    "verbose": true
+  },
+  "validation": {
+    "translator": "translate.py",
+    "evaluator": "multi-bleu.perl",
+    "nproc": 10,
+    "beam_size": 10,
+    "src_char_vocab": "data/nmt/vocab/wmt15.de-en.char_vocab.en",
+    "src_word_vocab": "data/nmt/vocab/wmt15.de-en.vocab.en",
+    "trg_char_vocab": "data/nmt/vocab/wmt15.de-en.char_vocab.de",
+    "trg_word_vocab": "data/nmt/vocab/wmt15.de-en.vocab.de",
+    "valid_src": "data/nmt/dev/newstest2013.norm.tok.en",
+    "valid_trg": "data/nmt/dev/newstest2013.norm.tok.de",
+    "trans_valid_src": "data/newstest2013.norm.tok.en.translated"
+  },
+  "data": {
+    "src": "data/nmt/train/wmt15.de-en.rmnpc.no_unipunc.norm.tok.clean.shuf.en",
+    "trg": "data/nmt/train/wmt15.de-en.rmnpc.no_unipunc.norm.tok.clean.shuf.de",
+    "src_char_vocab": "data/nmt/vocab/wmt15.de-en.char_vocab.en",
+    "src_word_vocab": "data/nmt/vocab/wmt15.de-en.vocab.en",
+    "trg_char_vocab": "data/nmt/vocab/wmt15.de-en.char_vocab.de",
+    "trg_word_vocab": "data/nmt/vocab/wmt15.de-en.vocab.de",
+    "valid_src": "data/nmt/dev/newstest2013.norm.tok.en",
+    "valid_trg": "data/nmt/dev/newstest2013.norm.tok.de",
+    "batch_size": 32,
+    "valid_batch_size": 32,
+    "n_chars_src": 300,
+    "n_chars_trg": 300,
+    "n_words_src": 50000,
+    "n_words_trg": 50000,
+    "max_src_word_length": 50,
+    "max_trg_word_length": 50,
+    "max_src_char_length": 300,
+    "max_trg_char_length": 300,
+    "max_unk_ratio": 0.8
+  },
+  "model": {
+    "dim": 1024,
+    "use_dropout": false,
+    "use_character": true,
+    "unk_gate": true,
+    "encoder": "gru",
+    "decoder": "gru_cond",
+    "init_decoder": "last",
+    "n_chars_src": 300,
+    "n_chars_trg": 300,
+    "n_words_src": 50000,
+    "n_words_trg": 50000,
+    "dim_char_src": 32,
+    "dim_char_trg": 32,
+    "char_hid": 256,
+    "dim_word_src": 512,
+    "dim_word_trg": 512 
+  }
+}

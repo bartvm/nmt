@@ -23,7 +23,8 @@
     "eval_intv": 180,
     "time_limit": 1340,
     "saveto": "model",
-    "save_freq": 1000
+    "save_freq": 1000,
+    "verbose": true
   },
   "validation": {
     "translator": "translate.py",
