@@ -9,6 +9,8 @@ import sys
 import traceback
 import io
 import json
+import time
+import psutil
 from multiprocessing import Process, Queue, Event
 
 try:
@@ -257,6 +259,15 @@ def main(model_path, option_path,
     # add sentinel values into the producer queue
     for midx in xrange(n_process):
         queue.put(None)
+
+    n_trials = 0
+    while psutil.cpu_percent(interval=2) > 95:
+        n_trials += 1
+        time.sleep(1800)
+
+        if n_trials > 10:
+            EXIT_STATUS = 124    # time out
+            sys.exit(EXIT_STATUS)
 
     # spawning workers
     processes = [None] * n_process
