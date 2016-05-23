@@ -72,6 +72,7 @@ def train(experiment_id, data_base_path,
     params = init_params(model_options)
     # reload parameters
     checkpoint_filename = '{}.checkpoint.npz'.format(experiment_id)
+    checkpoint_filename = os.path.join(data_base_path, checkpoint_filename)
     model_option_filename = '{}.config.json'.format(experiment_id)
     best_filename = '{}.{}.best.npz'.format(experiment_id, saveto)
     if reload_from and os.path.exists(reload_from):
@@ -89,7 +90,7 @@ def train(experiment_id, data_base_path,
 
     LOGGER.info('Building sampler')
     f_sample_inits, f_sample_nexts \
-        = build_sampler(tparams, model_options, trng)
+        = build_sampler(tparams, model_options, trng, use_noise)
 
     # before any regularizer
     LOGGER.info('Building functions to compute log prob')

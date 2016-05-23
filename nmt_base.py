@@ -867,7 +867,7 @@ def build_model(tparams, options):
 
 
 # build a sampler
-def build_sampler(tparams, options, trng):
+def build_sampler(tparams, options, trng, use_noise):
     x = tensor.matrix('x', dtype='int64')
     x_mask = tensor.matrix('x_mask', dtype='float32')
     xr = x[::-1]
@@ -1134,6 +1134,8 @@ def build_sampler(tparams, options, trng):
     word_logit = tensor.tanh(word_logit_lstm +
                              word_logit_prev +
                              word_logit_ctx)
+    if options['use_dropout']:
+        word_logit = dropout_layer(word_logit, use_noise, trng)
     word_logit = get_layer('ff')[1](tparams,
                                     word_logit,
                                     options,
@@ -1262,7 +1264,8 @@ def build_sampler(tparams, options, trng):
             char_logit_lstm +
             char_logit_prev
         )
-
+        if options['use_dropout']:
+            char_logit = dropout_layer(char_logit, use_noise, trng)
         char_logit = get_layer('ff')[1](tparams,
                                         char_logit,
                                         options,

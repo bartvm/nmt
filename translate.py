@@ -17,6 +17,7 @@ try:
     import numpy
     from six.moves import xrange
 
+    import theano
     from data_iterator import (load_dict, EOW_TOKEN, EOS_TOKEN, UNK_TOKEN)
     from nmt_base import (build_sampler, gen_sample, init_params)
     from utils import (load_params, init_tparams, prepare_character_tensor)
@@ -61,7 +62,7 @@ def translate_model(exit_event, queue, rqueue, pid,
 
     from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
     trng = RandomStreams(1234)
-    # use_noise = theano.shared(numpy.float32(0.))
+    use_noise = theano.shared(numpy.float32(0.))
 
     # allocate model parameters
     params = init_params(options)
@@ -71,7 +72,7 @@ def translate_model(exit_event, queue, rqueue, pid,
     tparams = init_tparams(params)
 
     # word index
-    f_inits, f_nexts = build_sampler(tparams, options, trng)
+    f_inits, f_nexts = build_sampler(tparams, options, trng, use_noise)
 
     def _seq2words(seq, word_idict_trg):
         words = []
