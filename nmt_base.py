@@ -227,6 +227,27 @@ def init_params(options):
                 nin=options['dim_word_trg'],
                 nout=options['dim_word_trg']
             )
+            params = get_layer('ff')[0](
+                options,
+                params,
+                prefix='char_gate_proj_src',
+                nin=2*options['char_hid'],
+                nout=options['dim_word_src']
+            )
+            params = get_layer('ff')[0](
+                options,
+                params,
+                prefix='char_gate_proj_src_r',
+                nin=2*options['char_hid'],
+                nout=options['dim_word_src']
+            )
+            params = get_layer('ff')[0](
+                options,
+                params,
+                prefix='char_gate_proj_trg',
+                nin=2*options['char_hid'],
+                nout=options['dim_word_trg']
+            )
 
         # hidden states at the word-level decoder are used to initialize
         # the character-level decoder
@@ -480,6 +501,15 @@ def build_model(tparams, options):
                                                activ=tensor.nnet.sigmoid)
             word_gate_src_r = word_gate_src[::-1]
 
+            cproj_comb_src = get_layer('ff')[1](tparams, cproj_comb_src,
+                                                options,
+                                                prefix='char_gate_proj_src',
+                                                activ=tensor.tanh)
+            cprojr_comb_src = get_layer('ff')[1](tparams, cprojr_comb_src,
+                                                 options,
+                                                 prefix='char_gate_proj_src_r',
+                                                 activ=tensor.tanh)
+
             src_inp = word_gate_src * wemb_src + \
                 (1 - word_gate_src) * cproj_comb_src
             src_inpr = word_gate_src_r * wembr_src + \
@@ -617,6 +647,10 @@ def build_model(tparams, options):
                                                prefix='word_gate_trg',
                                                activ=tensor.nnet.sigmoid)
 
+            cproj_comb_trg = get_layer('ff')[1](tparams, cproj_comb_trg,
+                                                options,
+                                                prefix='char_gate_proj_trg',
+                                                activ=tensor.tanh)
             trg_inp = word_gate_trg * wemb_trg + \
                 (1 - word_gate_trg) * cproj_comb_trg
         else:
@@ -907,6 +941,15 @@ def build_sampler(tparams, options, trng):
                                                activ=tensor.nnet.sigmoid)
             word_gate_src_r = word_gate_src[::-1]
 
+            cproj_comb_src = get_layer('ff')[1](tparams, cproj_comb_src,
+                                                options,
+                                                prefix='char_gate_proj_src',
+                                                activ=tensor.tanh)
+            cprojr_comb_src = get_layer('ff')[1](tparams, cprojr_comb_src,
+                                                 options,
+                                                 prefix='char_gate_proj_src_r',
+                                                 activ=tensor.tanh)
+
             src_inp = word_gate_src * wemb_src + \
                 (1 - word_gate_src) * cproj_comb_src
             src_inpr = word_gate_src_r * wembr_src + \
@@ -1033,6 +1076,11 @@ def build_sampler(tparams, options, trng):
             word_gate_trg = get_layer('ff')[1](tparams, wemb_trg, options,
                                                prefix='word_gate_trg',
                                                activ=tensor.nnet.sigmoid)
+
+            cproj_comb_trg = get_layer('ff')[1](tparams, cproj_comb_trg,
+                                                options,
+                                                prefix='char_gate_proj_trg',
+                                                activ=tensor.tanh)
             trg_inp = word_gate_trg * wemb_trg + \
                 (1 - word_gate_trg) * cproj_comb_trg
 
