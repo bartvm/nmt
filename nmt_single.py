@@ -346,10 +346,11 @@ def train(experiment_id, data_base_path,
                         ss = word_sample[word_score.argmin()]
                         word_alignment = word_alignment[word_score.argmin()]
 
+                        num_src_words = int(x_mask[:, jj].sum())
+
                         if model_options['use_character'] and \
                            model_options['unk_gate']:
                             word_src_gates = word_solutions['word_src_gates']
-                            num_src_words = int(x_mask[:, jj].sum())
                             log_entry['samples'][-1]['word_gates_src'] = \
                                 numpy.array2string(
                                     word_src_gates[:num_src_words, :].T,

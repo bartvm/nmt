@@ -141,8 +141,9 @@ def translate_model(exit_event, queue, rqueue, pid,
         return translation_outputs
 
     def _replace_unk(trans_words, src_words,
-                     alignment, trans_words_char):
+                     alignment, trans_words_char=None):
         if use_character:
+            assert trans_words_char
             assert len(trans_words) == len(trans_words_char)
 
         for idx, word in enumerate(trans_words):
